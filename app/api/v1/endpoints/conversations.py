@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -15,7 +18,7 @@ from app.schemas.message import MessageCreate, MessageOut
 router = APIRouter()
 
 
-# ── Conversations ────────────────────────────────────────────────────────────
+# ── Conversations ─────────────────────────────────────────────────────────────
 
 @router.get("/", response_model=list[ConversationOut])
 def list_conversations(
@@ -43,14 +46,12 @@ def create_conversation(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Verify customer belongs to this seller
     customer = db.query(Customer).filter(
         Customer.id == payload.customer_id, Customer.user_id == current_user.id
     ).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
-    # Reuse open conversation if one already exists on the same platform
     existing = db.query(Conversation).filter(
         Conversation.user_id == current_user.id,
         Conversation.customer_id == payload.customer_id,
@@ -108,7 +109,7 @@ def update_conversation(
     return conversation
 
 
-# ── Messages ─────────────────────────────────────────────────────────────────
+# ── Messages ──────────────────────────────────────────────────────────────────
 
 @router.get("/{conversation_id}/messages", response_model=list[MessageOut])
 def list_messages(
@@ -158,11 +159,7 @@ def send_message(
         content=payload.content,
     )
     db.add(message)
-
-    # Bump conversation updated_at so it surfaces at the top of the list
-    from datetime import datetime
     conversation.updated_at = datetime.utcnow()
-
     db.commit()
     db.refresh(message)
     return message

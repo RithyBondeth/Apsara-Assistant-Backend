@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -32,7 +34,6 @@ def create_customer(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Prevent duplicate platform customers for the same seller
     if payload.platform and payload.platform_id:
         existing = db.query(Customer).filter(
             Customer.user_id == current_user.id,
