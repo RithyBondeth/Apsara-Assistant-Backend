@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.schemas.message import MessageOut
+
 
 class ConversationCreate(BaseModel):
     customer_id: UUID
@@ -23,3 +25,7 @@ class ConversationOut(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ConversationDetailOut(ConversationOut):
+    messages: list[MessageOut] = []
