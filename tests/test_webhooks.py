@@ -1,7 +1,12 @@
 """Webhook tests: routing, secret verification, and AI reply wiring (mocked)."""
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+
 import app.services.chat_service as chat_service
+import app.services.messenger as messenger_service
 import app.services.telegram as telegram_service
 
 
@@ -105,6 +110,52 @@ def test_telegram_webhook_unknown_integration_404(auth_client):
         headers={"X-Telegram-Bot-Api-Secret-Token": "x"},
     )
     assert r.status_code == 404
+
+
+def test_messenger_webhook_resolves_real_customer_name(auth_client, monkeypatch):
+    client, _token, _uid = auth_client
+    r = client.post(
+        "/api/v1/integrations/",
+        json={
+            "platform": "messenger",
+            "access_token": "page-token",
+            "secret_token": "verifyme",
+            "app_secret": "app-secret",
+        },
+    )
+    integration_id = r.json()["id"]
+
+    async def fake_ai(messages):
+        return "reply"
+
+    async def fake_send(access_token, recipient_id, text):
+        pass
+
+    async def fake_profile(access_token, psid):
+        return "Sok Dara"
+
+    monkeypatch.setattr(chat_service, "generate_ai_reply", fake_ai)
+    monkeypatch.setattr(messenger_service, "send_message", fake_send)
+    monkeypatch.setattr(messenger_service, "get_profile_name", fake_profile)
+
+    payload = {"entry": [{"messaging": [
+        {"sender": {"id": "PSID123"}, "message": {"mid": "m1", "text": "hello"}}
+    ]}]}
+    raw = json.dumps(payload).encode()
+    sig = "sha256=" + hmac.new(b"app-secret", raw, hashlib.sha256).hexdigest()
+
+    resp = client.post(
+        f"/api/v1/webhooks/messenger/{integration_id}",
+        content=raw,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+
+    # customer was created with the resolved Graph name, not the PSID placeholder
+    customers = client.get("/api/v1/customers/").json()
+    assert len(customers) == 1
+    assert customers[0]["name"] == "Sok Dara"
+    assert customers[0]["platform_id"] == "PSID123"
 
 
 def test_messenger_verify_handshake(auth_client):

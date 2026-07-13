@@ -31,22 +31,22 @@ def _get_active_integration(db: Session, integration_id: UUID, platform: str) ->
     return integration
 
 
-def _get_or_create_customer(
-    db: Session, user_id: UUID, platform: str, inbound: InboundMessage
-) -> Customer:
-    customer = db.query(Customer).filter(
+def _find_customer(db: Session, user_id: UUID, platform: str, external_user_id: str) -> Customer | None:
+    return db.query(Customer).filter(
         Customer.user_id == user_id,
         Customer.platform == platform,
-        Customer.platform_id == inbound.external_user_id,
+        Customer.platform_id == external_user_id,
     ).first()
-    if customer:
-        return customer
 
+
+def _create_customer(
+    db: Session, user_id: UUID, platform: str, external_user_id: str, name: str
+) -> Customer:
     customer = Customer(
         user_id=user_id,
-        name=inbound.sender_name,
+        name=name,
         platform=platform,
-        platform_id=inbound.external_user_id,
+        platform_id=external_user_id,
     )
     db.add(customer)
     db.flush()
@@ -109,7 +109,21 @@ async def _reply_to_inbound(
     if not _claim_event(db, integration.id, inbound.event_id):
         logger.info("Skipping duplicate %s event %s", platform, inbound.event_id)
         return None
-    customer = _get_or_create_customer(db, integration.user_id, platform, inbound)
+
+    customer = _find_customer(db, integration.user_id, platform, inbound.external_user_id)
+    if customer is None:
+        name = inbound.sender_name
+        # Messenger webhooks only carry the PSID, so look up the real name once,
+        # when the customer is first seen.
+        if platform == "messenger":
+            resolved = await messenger.get_profile_name(
+                integration.access_token, inbound.external_user_id
+            )
+            name = resolved or name
+        customer = _create_customer(
+            db, integration.user_id, platform, inbound.external_user_id, name
+        )
+
     conversation = _get_or_create_conversation(db, integration.user_id, customer.id, platform)
     try:
         _customer_msg, ai_msg = await generate_reply(

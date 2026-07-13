@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 
 import httpx
 
 from app.services.messaging import InboundMessage
+
+logger = logging.getLogger(__name__)
 
 GRAPH_API = "https://graph.facebook.com/v19.0/{path}"
 
@@ -62,6 +65,29 @@ async def send_message(access_token: str, recipient_id: str, text: str) -> None:
             json={"recipient": {"id": recipient_id}, "message": {"text": text}},
         )
         resp.raise_for_status()
+
+
+async def get_profile_name(access_token: str, psid: str) -> str | None:
+    """Fetch a customer's display name from their PSID, or None on failure.
+
+    Best-effort: any error (permissions, deleted user, network) returns None so
+    the caller falls back to a placeholder rather than dropping the message.
+    """
+    url = GRAPH_API.format(path=psid)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                url,
+                params={"fields": "first_name,last_name", "access_token": access_token},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPError:
+        logger.warning("Messenger profile lookup failed for psid %s", psid)
+        return None
+
+    name = " ".join(p for p in (data.get("first_name"), data.get("last_name")) if p)
+    return name or None
 
 
 async def subscribe_page(access_token: str, page_id: str) -> dict:
