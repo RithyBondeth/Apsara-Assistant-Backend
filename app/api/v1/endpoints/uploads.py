@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
 from app.api.deps import get_current_user
 from app.models.user import User
@@ -47,3 +47,21 @@ async def upload_image(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Upload failed: {exc}")
 
     return UploadResult(**result)
+
+
+@router.delete("/image", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_image(
+    public_id: str = Query(..., description="Cloudinary public_id returned at upload time"),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a previously uploaded image from Cloudinary to avoid orphans."""
+    if not cloudinary_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Image uploads are not configured on the server",
+        )
+
+    try:
+        await cloudinary_service.delete_image(public_id)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Delete failed: {exc}")
