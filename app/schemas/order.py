@@ -10,7 +10,8 @@ from pydantic import BaseModel
 class OrderItemCreate(BaseModel):
     product_id: UUID
     quantity: int
-    unit_price: Decimal
+    # unit_price is intentionally omitted — the server uses the product's
+    # current price as the source of truth (see endpoints/orders.py).
 
 
 class OrderItemOut(BaseModel):
