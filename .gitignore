@@ -1,7 +1,11 @@
-# Environment
+# Environment — ignore real secrets, but KEEP the committed templates in deploy/
 .env
 .env.local
 .env.*.local
+!.env.example
+!deploy/.env.local
+!deploy/.env.dev
+!deploy/.env.production
 
 # Python
 __pycache__/

@@ -13,3 +13,4 @@ python-multipart==0.0.20
 openai==1.57.4
 boto3==1.35.86
 httpx==0.28.1
+gunicorn==23.0.0

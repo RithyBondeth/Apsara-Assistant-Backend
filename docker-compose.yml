@@ -1,0 +1,48 @@
+# Local development stack: Postgres + API.
+# Usage:
+#   cp deploy/.env.local .env      # then fill OPENAI_API_KEY etc.
+#   docker compose up --build
+# API → http://localhost:8000  (docs at /docs)
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: apsara
+      POSTGRES_PASSWORD: apsara
+      POSTGRES_DB: apsara
+    ports:
+      - "5432:5432"
+    volumes:
+      - apsara_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apsara -d apsara"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    env_file: .env
+    # Override host DB with the compose service name; entrypoint runs migrations
+    environment:
+      DATABASE_URL: postgresql://apsara:apsara@db:5432/apsara
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    # Dev convenience: hot-reload from mounted source (single worker)
+    volumes:
+      - ./:/app
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+
+volumes:
+  apsara_pgdata:
