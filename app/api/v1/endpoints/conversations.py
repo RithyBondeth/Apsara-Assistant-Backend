@@ -109,6 +109,22 @@ def update_conversation(
     return conversation
 
 
+@router.delete("/{conversation_id}", status_code=204)
+def delete_conversation(
+    conversation_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id, Conversation.user_id == current_user.id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    db.delete(conversation)  # messages cascade via the relationship
+    db.commit()
+
+
 # ── Messages ──────────────────────────────────────────────────────────────────
 
 @router.get("/{conversation_id}/messages", response_model=list[MessageOut])

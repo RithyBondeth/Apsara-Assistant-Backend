@@ -30,8 +30,13 @@ class PlatformIntegration(Base):
     external_id = Column(String, index=True)
     # Token used to call the platform's send API (bot token / page access token)
     access_token = Column(String, nullable=False)
-    # Shared secret we verify on every inbound webhook request
+    # Shared secret we verify on every inbound webhook request.
+    # Telegram: the setWebhook secret_token. Messenger: the verify token used
+    # during the GET subscription handshake.
     secret_token = Column(String)
+    # Messenger only: the Facebook App Secret, used to verify the
+    # X-Hub-Signature-256 HMAC on inbound POSTs.
+    app_secret = Column(String)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

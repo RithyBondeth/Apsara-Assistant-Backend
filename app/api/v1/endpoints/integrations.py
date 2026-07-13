@@ -17,11 +17,11 @@ from app.schemas.integration import (
     IntegrationUpdate,
     WebhookRegisterOut,
 )
-from app.services import telegram
+from app.services import messenger, telegram
 
 router = APIRouter()
 
-SUPPORTED_PLATFORMS = {"telegram"}  # messenger / tiktok land in later phases
+SUPPORTED_PLATFORMS = {"telegram", "messenger"}  # tiktok lands in a later phase
 
 
 @router.get("/", response_model=list[IntegrationOut])
@@ -49,12 +49,19 @@ def create_integration(
             detail=f"Unsupported platform. Supported: {', '.join(sorted(SUPPORTED_PLATFORMS))}",
         )
 
+    if payload.platform == "messenger" and not payload.app_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="app_secret is required for Messenger integrations",
+        )
+
     integration = PlatformIntegration(
         user_id=current_user.id,
         platform=payload.platform,
         access_token=payload.access_token,
         external_id=payload.external_id,
         secret_token=payload.secret_token,
+        app_secret=payload.app_secret,
     )
     db.add(integration)
     try:
@@ -77,6 +84,15 @@ def _get_owned_integration(db: Session, integration_id: UUID, user: User) -> Pla
     if not integration:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integration not found")
     return integration
+
+
+@router.get("/{integration_id}", response_model=IntegrationOut)
+def get_integration(
+    integration_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return _get_owned_integration(db, integration_id, current_user)
 
 
 @router.patch("/{integration_id}", response_model=IntegrationOut)
@@ -131,6 +147,22 @@ async def register_webhook(
             webhook_url=webhook_url,
             ok=bool(result.get("ok")),
             detail=result.get("description"),
+        )
+
+    if integration.platform == "messenger":
+        # The callback URL + verify token are entered in the Facebook App
+        # dashboard (pointing at webhook_url below). Here we subscribe the page
+        # to the app so its message events start flowing.
+        if not integration.external_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="external_id (Facebook Page id) is required to subscribe the page",
+            )
+        result = await messenger.subscribe_page(integration.access_token, integration.external_id)
+        return WebhookRegisterOut(
+            webhook_url=webhook_url,
+            ok=bool(result.get("success")),
+            detail="Set this URL + verify token in the Meta App dashboard, then subscribe the page.",
         )
 
     raise HTTPException(

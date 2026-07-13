@@ -1,19 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import httpx
 
+from app.services.messaging import InboundMessage
+
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
-
-
-@dataclass
-class InboundMessage:
-    """A normalized inbound message extracted from a platform update."""
-
-    external_user_id: str  # platform-side sender id (Telegram chat id)
-    sender_name: str
-    text: str
 
 
 def parse_update(update: dict) -> InboundMessage | None:

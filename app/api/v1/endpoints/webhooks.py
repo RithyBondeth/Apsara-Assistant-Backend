@@ -3,16 +3,16 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.platform_integration import PlatformIntegration
-from app.services import telegram
+from app.services import messenger, telegram
 from app.services.chat_service import generate_reply
-from app.services.telegram import InboundMessage
+from app.services.messaging import InboundMessage
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,27 @@ def _get_or_create_conversation(
     return conversation
 
 
+async def _reply_to_inbound(
+    db: Session, integration: PlatformIntegration, inbound: InboundMessage
+) -> str | None:
+    """Run the AI pipeline for one inbound message; return the reply text.
+
+    Returns None if the AI/DB step fails (already logged), so the caller can
+    ack the webhook without sending anything.
+    """
+    platform = integration.platform
+    customer = _get_or_create_customer(db, integration.user_id, platform, inbound)
+    conversation = _get_or_create_conversation(db, integration.user_id, customer.id, platform)
+    try:
+        _customer_msg, ai_msg = await generate_reply(
+            db, conversation, integration.user, inbound.text
+        )
+    except Exception:
+        logger.exception("AI pipeline failed for %s integration %s", platform, integration.id)
+        return None
+    return ai_msg.content
+
+
 @router.post("/telegram/{integration_id}")
 async def telegram_webhook(
     integration_id: UUID,
@@ -99,21 +120,61 @@ async def telegram_webhook(
         # Non-text / unsupported update — ack so Telegram stops retrying
         return {"ok": True, "handled": False}
 
-    customer = _get_or_create_customer(db, integration.user_id, "telegram", inbound)
-    conversation = _get_or_create_conversation(db, integration.user_id, customer.id, "telegram")
-
-    try:
-        _customer_msg, ai_msg = await generate_reply(
-            db, conversation, integration.user, inbound.text
-        )
-    except Exception:
-        logger.exception("AI pipeline failed for telegram integration %s", integration_id)
+    reply = await _reply_to_inbound(db, integration, inbound)
+    if reply is None:
         # Ack anyway; retrying won't help an AI/DB failure and would double-post
         return {"ok": True, "handled": False}
 
     try:
-        await telegram.send_message(integration.access_token, inbound.external_user_id, ai_msg.content)
+        await telegram.send_message(integration.access_token, inbound.external_user_id, reply)
     except Exception:
         logger.exception("Failed to send telegram reply for integration %s", integration_id)
 
     return {"ok": True, "handled": True}
+
+
+@router.get("/messenger/{integration_id}")
+async def messenger_verify(
+    integration_id: UUID,
+    db: Session = Depends(get_db),
+    hub_mode: str | None = Query(default=None, alias="hub.mode"),
+    hub_verify_token: str | None = Query(default=None, alias="hub.verify_token"),
+    hub_challenge: str | None = Query(default=None, alias="hub.challenge"),
+):
+    """Messenger subscription handshake: echo hub.challenge when the token matches."""
+    integration = _get_active_integration(db, integration_id, "messenger")
+    if hub_mode == "subscribe" and hub_verify_token == integration.secret_token:
+        return Response(content=hub_challenge or "", media_type="text/plain")
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Verification failed")
+
+
+@router.post("/messenger/{integration_id}")
+async def messenger_webhook(
+    integration_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    x_hub_signature_256: str | None = Header(default=None),
+):
+    """Receive Messenger events for one seller's page and auto-reply."""
+    integration = _get_active_integration(db, integration_id, "messenger")
+
+    raw_body = await request.body()
+    if not messenger.verify_signature(integration.app_secret, raw_body, x_hub_signature_256):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
+
+    payload = await request.json()
+    inbound_messages = messenger.parse_updates(payload)
+
+    handled = 0
+    for inbound in inbound_messages:
+        reply = await _reply_to_inbound(db, integration, inbound)
+        if reply is None:
+            continue
+        try:
+            await messenger.send_message(integration.access_token, inbound.external_user_id, reply)
+            handled += 1
+        except Exception:
+            logger.exception("Failed to send messenger reply for integration %s", integration_id)
+
+    # Messenger expects a 200 with "EVENT_RECEIVED" to stop retries
+    return Response(content="EVENT_RECEIVED", media_type="text/plain")

@@ -26,6 +26,7 @@ def upgrade() -> None:
         sa.Column('external_id', sa.String(), nullable=True),
         sa.Column('access_token', sa.String(), nullable=False),
         sa.Column('secret_token', sa.String(), nullable=True),
+        sa.Column('app_secret', sa.String(), nullable=True),
         sa.Column('is_active', sa.Boolean(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=True),
         sa.Column('updated_at', sa.DateTime(), nullable=True),
