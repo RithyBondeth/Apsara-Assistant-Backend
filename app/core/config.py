@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days
 
+    # Fernet key for encrypting stored secrets (integration tokens) at rest.
+    # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # If blank, a key is derived from SECRET_KEY (fine for dev; set an explicit
+    # key in production so rotating SECRET_KEY doesn't orphan encrypted data).
+    ENCRYPTION_KEY: str = ""
+
     # ── AI ───────────────────────────────────────────────────────────────────
     OPENAI_API_KEY: str = ""
 

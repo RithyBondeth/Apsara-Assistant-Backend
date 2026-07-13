@@ -22,11 +22,24 @@ VALID_STATUSES = {"pending", "confirmed", "processing", "shipped", "delivered", 
 
 
 def _restock_order(db: Session, order: Order) -> None:
-    """Return each line item's quantity back to the product's stock."""
+    """Return each line item's quantity back to the product's stock.
+
+    Rows are locked (FOR UPDATE) in id order to stay consistent with
+    create_order and avoid lost updates / deadlocks under concurrent cancels.
+    """
+    quantities: dict = {}
     for item in order.items:
-        product = db.query(Product).filter(Product.id == item.product_id).first()
-        if product is not None:
-            product.stock += item.quantity
+        quantities[item.product_id] = quantities.get(item.product_id, 0) + item.quantity
+
+    locked = (
+        db.query(Product)
+        .filter(Product.id.in_(quantities.keys()))
+        .order_by(Product.id)
+        .with_for_update()
+        .all()
+    )
+    for product in locked:
+        product.stock += quantities[product.id]
 
 
 @router.get("/", response_model=list[OrderOut])
@@ -82,16 +95,27 @@ def create_order(
         total_amount=0,
     )
 
+    if any(item.quantity <= 0 for item in payload.items):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Item quantity must be positive"
+        )
+
+    # Lock every product row up front (FOR UPDATE) so concurrent orders can't
+    # oversell the same stock. Locking in a deterministic id order avoids
+    # deadlocks between two orders that share products.
+    product_ids = sorted({item.product_id for item in payload.items})
+    locked = (
+        db.query(Product)
+        .filter(Product.id.in_(product_ids), Product.user_id == current_user.id)
+        .order_by(Product.id)
+        .with_for_update()
+        .all()
+    )
+    products_by_id = {p.id: p for p in locked}
+
     total = 0
     for item in payload.items:
-        if item.quantity <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Item quantity must be positive"
-            )
-
-        product = db.query(Product).filter(
-            Product.id == item.product_id, Product.user_id == current_user.id
-        ).first()
+        product = products_by_id.get(item.product_id)
         if not product:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

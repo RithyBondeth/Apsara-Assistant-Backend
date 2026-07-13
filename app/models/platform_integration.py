@@ -5,6 +5,7 @@ from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, UniqueCons
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
+from app.core.crypto import EncryptedString
 from app.database import Base
 
 # platform: messenger, telegram, tiktok, website
@@ -29,14 +30,14 @@ class PlatformIntegration(Base):
     # Platform-side account id: Telegram bot id, Facebook Page id, etc.
     external_id = Column(String, index=True)
     # Token used to call the platform's send API (bot token / page access token)
-    access_token = Column(String, nullable=False)
+    access_token = Column(EncryptedString, nullable=False)
     # Shared secret we verify on every inbound webhook request.
     # Telegram: the setWebhook secret_token. Messenger: the verify token used
     # during the GET subscription handshake.
-    secret_token = Column(String)
+    secret_token = Column(EncryptedString)
     # Messenger only: the Facebook App Secret, used to verify the
     # X-Hub-Signature-256 HMAC on inbound POSTs.
-    app_secret = Column(String)
+    app_secret = Column(EncryptedString)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

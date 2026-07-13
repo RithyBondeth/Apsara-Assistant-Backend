@@ -75,6 +75,24 @@ def test_cancel_order_restocks(shop):
     assert client.get(f"/api/v1/products/{product_id}").json()["stock"] == 5
 
 
+def test_same_product_across_items_aggregates_stock(shop):
+    client, customer_id, product_id = shop  # stock = 5
+    # Two line items for the same product: 3 + 3 = 6 > 5 available
+    r = client.post(
+        "/api/v1/orders/",
+        json={
+            "customer_id": customer_id,
+            "items": [
+                {"product_id": product_id, "quantity": 3},
+                {"product_id": product_id, "quantity": 3},
+            ],
+        },
+    )
+    assert r.status_code == 400
+    # nothing committed — stock untouched
+    assert client.get(f"/api/v1/products/{product_id}").json()["stock"] == 5
+
+
 def test_invalid_status_rejected(shop):
     client, customer_id, product_id = shop
     order_id = client.post(

@@ -58,10 +58,13 @@ def client(db_session):
     """TestClient whose get_db yields the test session."""
 
     def _override_get_db():
+        # Mirror production: each request gets the session and any work left
+        # uncommitted (e.g. a request that raised mid-transaction) is rolled
+        # back when the session closes, rather than leaking to the next request.
         try:
             yield db_session
         finally:
-            pass
+            db_session.rollback()
 
     app.dependency_overrides[get_db] = _override_get_db
     with TestClient(app) as c:
