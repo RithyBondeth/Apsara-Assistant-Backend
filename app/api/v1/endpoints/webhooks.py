@@ -10,6 +10,7 @@ from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.platform_integration import PlatformIntegration
+from app.models.webhook_event import WebhookEvent
 from app.services import messenger, telegram
 from app.services.chat_service import generate_reply
 from app.services.messaging import InboundMessage
@@ -75,15 +76,39 @@ def _get_or_create_conversation(
     return conversation
 
 
+def _claim_event(db: Session, integration_id: UUID, event_id: str | None) -> bool:
+    """Reserve an inbound event for processing; return False if already seen.
+
+    The WebhookEvent row is flushed within the caller's transaction and gets
+    committed alongside the reply — so a failed reply rolls the claim back and
+    a genuine redelivery can retry, while a successful one blocks duplicates.
+    """
+    if event_id is None:
+        return True  # nothing to dedupe on — process it
+    seen = (
+        db.query(WebhookEvent.id)
+        .filter(WebhookEvent.integration_id == integration_id, WebhookEvent.event_id == event_id)
+        .first()
+    )
+    if seen:
+        return False
+    db.add(WebhookEvent(integration_id=integration_id, event_id=event_id))
+    db.flush()
+    return True
+
+
 async def _reply_to_inbound(
     db: Session, integration: PlatformIntegration, inbound: InboundMessage
 ) -> str | None:
     """Run the AI pipeline for one inbound message; return the reply text.
 
-    Returns None if the AI/DB step fails (already logged), so the caller can
-    ack the webhook without sending anything.
+    Returns None if the event is a duplicate or the AI/DB step fails (both
+    logged), so the caller can ack the webhook without sending anything.
     """
     platform = integration.platform
+    if not _claim_event(db, integration.id, inbound.event_id):
+        logger.info("Skipping duplicate %s event %s", platform, inbound.event_id)
+        return None
     customer = _get_or_create_customer(db, integration.user_id, platform, inbound)
     conversation = _get_or_create_conversation(db, integration.user_id, customer.id, platform)
     try:

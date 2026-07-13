@@ -14,3 +14,6 @@ class InboundMessage:
     external_user_id: str  # platform-side sender id (Telegram chat id, Messenger PSID)
     sender_name: str
     text: str
+    # Platform-unique id for this message/update, used to de-duplicate
+    # redelivered webhooks (Telegram update_id, Messenger message.mid).
+    event_id: str | None = None

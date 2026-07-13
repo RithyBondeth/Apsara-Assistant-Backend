@@ -45,6 +45,8 @@ def parse_updates(payload: dict) -> list[InboundMessage]:
                     external_user_id=str(sender_id),
                     sender_name=f"Messenger {sender_id}",
                     text=message["text"],
+                    # mid is unique per message and resent on redelivery
+                    event_id=message.get("mid"),
                 )
             )
     return messages

@@ -7,6 +7,7 @@ from app.models.order_item import OrderItem
 from app.models.platform_integration import PlatformIntegration
 from app.models.product import Product
 from app.models.user import User
+from app.models.webhook_event import WebhookEvent
 
 __all__ = [
     "User",
@@ -18,4 +19,5 @@ __all__ = [
     "Order",
     "OrderItem",
     "PlatformIntegration",
+    "WebhookEvent",
 ]

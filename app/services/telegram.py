@@ -26,10 +26,15 @@ def parse_update(update: dict) -> InboundMessage | None:
         part for part in (chat.get("first_name"), chat.get("last_name")) if part
     ) or chat.get("username") or f"Telegram {chat_id}"
 
+    # update_id is unique per bot and resent verbatim on redelivery.
+    update_id = update.get("update_id")
+    event_id = str(update_id) if update_id is not None else None
+
     return InboundMessage(
         external_user_id=str(chat_id),
         sender_name=name,
         text=message["text"],
+        event_id=event_id,
     )
 
 

@@ -51,6 +51,41 @@ def test_telegram_webhook_creates_conversation_and_replies(auth_client, monkeypa
     assert kinds == ["customer", "assistant"]
 
 
+def test_telegram_webhook_is_idempotent_on_redelivery(auth_client, monkeypatch):
+    client, _token, _uid = auth_client
+    integration_id = _make_telegram_integration(client)
+
+    async def fake_ai(messages):
+        return "reply"
+
+    sent = []
+
+    async def fake_send(access_token, chat_id, text):
+        sent.append((chat_id, text))
+
+    monkeypatch.setattr(chat_service, "generate_ai_reply", fake_ai)
+    monkeypatch.setattr(telegram_service, "send_message", fake_send)
+
+    # Same update_id delivered twice (platform redelivery)
+    update = {
+        "update_id": 100200,
+        "message": {"chat": {"id": 555, "first_name": "Dara"}, "text": "hello"},
+    }
+    headers = {"X-Telegram-Bot-Api-Secret-Token": "s3cr3t"}
+    first = client.post(f"/api/v1/webhooks/telegram/{integration_id}", json=update, headers=headers)
+    second = client.post(f"/api/v1/webhooks/telegram/{integration_id}", json=update, headers=headers)
+
+    assert first.json() == {"ok": True, "handled": True}
+    assert second.json() == {"ok": True, "handled": False}  # deduped
+
+    # Only one reply sent, and the conversation has exactly 2 messages (not 4)
+    assert len(sent) == 1
+    convs = client.get("/api/v1/conversations/").json()
+    assert len(convs) == 1
+    msgs = client.get(f"/api/v1/conversations/{convs[0]['id']}/messages").json()
+    assert len(msgs) == 2
+
+
 def test_telegram_webhook_rejects_bad_secret(auth_client):
     client, _token, _uid = auth_client
     integration_id = _make_telegram_integration(client)
