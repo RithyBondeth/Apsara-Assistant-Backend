@@ -2,20 +2,26 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# bcrypt only considers the first 72 bytes of a password.
+_BCRYPT_MAX_BYTES = 72
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    digest = bcrypt.hashpw(password.encode("utf-8")[:_BCRYPT_MAX_BYTES], bcrypt.gensalt())
+    return digest.decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8")[:_BCRYPT_MAX_BYTES], hashed.encode("utf-8"))
+    except ValueError:
+        # Malformed / non-bcrypt hash stored — treat as a failed match
+        return False
 
 
 def create_access_token(subject: str) -> str:

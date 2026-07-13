@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
@@ -12,7 +12,12 @@ from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.message import Message
 from app.models.user import User
-from app.schemas.conversation import ConversationCreate, ConversationDetailOut, ConversationOut, ConversationUpdate
+from app.schemas.conversation import (
+    ConversationCreate,
+    ConversationDetailOut,
+    ConversationOut,
+    ConversationUpdate,
+)
 from app.schemas.message import MessageCreate, MessageOut
 
 router = APIRouter()

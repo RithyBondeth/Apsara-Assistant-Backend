@@ -2,15 +2,18 @@
 # Run `make help` to list targets.
 
 .DEFAULT_GOAL := help
-.PHONY: help install env secret run migrate revision downgrade \
+.PHONY: help install install-dev env secret run migrate revision downgrade \
         up down logs psql build test lint
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-install: ## Install Python dependencies into the active venv
+install: ## Install runtime dependencies into the active venv
 	pip install -r requirements.txt
+
+install-dev: ## Install runtime + test/lint dependencies
+	pip install -r requirements-dev.txt
 
 env: ## Create .env from the local template (won't overwrite)
 	@test -f .env && echo ".env already exists" || (cp deploy/.env.local .env && echo "Created .env from deploy/.env.local")

@@ -2,15 +2,15 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     auth,
-    products,
-    customers,
-    conversations,
-    orders,
     chat,
-    webhooks,
-    integrations,
+    conversations,
+    customers,
     dashboard,
+    integrations,
+    orders,
+    products,
     uploads,
+    webhooks,
 )
 
 api_router = APIRouter()

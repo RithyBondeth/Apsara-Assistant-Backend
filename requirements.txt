@@ -8,7 +8,7 @@ pydantic-settings==2.6.1
 eval-type-backport==0.2.0
 python-dotenv==1.0.1
 python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+bcrypt==5.0.0
 python-multipart==0.0.20
 openai==1.57.4
 boto3==1.35.86

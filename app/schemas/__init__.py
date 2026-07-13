@@ -1,14 +1,14 @@
-from app.schemas.user import UserCreate, UserUpdate, UserOut, Token, TokenPayload, PasswordChange
+from app.schemas.conversation import ConversationCreate, ConversationOut, ConversationUpdate
+from app.schemas.customer import CustomerCreate, CustomerOut, CustomerUpdate
 from app.schemas.dashboard import DashboardStats
-from app.schemas.upload import UploadResult
-from app.schemas.customer import CustomerCreate, CustomerUpdate, CustomerOut
-from app.schemas.product import ProductCreate, ProductUpdate, ProductOut
-from app.schemas.conversation import ConversationCreate, ConversationUpdate, ConversationOut
-from app.schemas.message import MessageCreate, MessageOut, AttachmentOut
-from app.schemas.order import OrderCreate, OrderUpdate, OrderOut, OrderItemCreate, OrderItemOut
 from app.schemas.integration import (
     IntegrationCreate,
-    IntegrationUpdate,
     IntegrationOut,
+    IntegrationUpdate,
     WebhookRegisterOut,
 )
+from app.schemas.message import AttachmentOut, MessageCreate, MessageOut
+from app.schemas.order import OrderCreate, OrderItemCreate, OrderItemOut, OrderOut, OrderUpdate
+from app.schemas.product import ProductCreate, ProductOut, ProductUpdate
+from app.schemas.upload import UploadResult
+from app.schemas.user import PasswordChange, Token, TokenPayload, UserCreate, UserOut, UserUpdate
