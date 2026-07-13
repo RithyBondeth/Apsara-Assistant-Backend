@@ -9,6 +9,10 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str = ""
 
+    # Public base URL of this API, used to build platform webhook URLs
+    # e.g. https://api.apsara.example.com
+    PUBLIC_BASE_URL: str = ""
+
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
     AWS_S3_BUCKET: str = ""

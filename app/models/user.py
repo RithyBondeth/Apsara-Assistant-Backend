@@ -24,3 +24,4 @@ class User(Base):
     products = relationship("Product", back_populates="user")
     conversations = relationship("Conversation", back_populates="user")
     orders = relationship("Order", back_populates="user")
+    integrations = relationship("PlatformIntegration", back_populates="user", cascade="all, delete-orphan")

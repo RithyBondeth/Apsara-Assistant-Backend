@@ -6,6 +6,7 @@ from app.models.message import Message
 from app.models.attachment import Attachment
 from app.models.order import Order
 from app.models.order_item import OrderItem
+from app.models.platform_integration import PlatformIntegration
 
 __all__ = [
     "User",
@@ -16,4 +17,5 @@ __all__ = [
     "Attachment",
     "Order",
     "OrderItem",
+    "PlatformIntegration",
 ]
