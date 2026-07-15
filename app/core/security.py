@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta
 
 import bcrypt
@@ -36,3 +37,13 @@ def decode_access_token(token: str) -> str | None:
         return payload.get("sub")
     except JWTError:
         return None
+
+
+def hash_token(raw: str) -> str:
+    """SHA-256 of a single-use secret (reset token / OTP code) for storage at rest.
+
+    We only ever persist this digest, so a database leak never exposes a usable
+    token. SHA-256 (not bcrypt) is appropriate here: reset tokens are high-entropy,
+    and OTP codes are additionally protected by short expiry and attempt limits.
+    """
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()

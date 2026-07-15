@@ -12,3 +12,4 @@ from app.schemas.order import OrderCreate, OrderItemCreate, OrderItemOut, OrderO
 from app.schemas.product import ProductCreate, ProductOut, ProductUpdate
 from app.schemas.upload import UploadResult
 from app.schemas.user import PasswordChange, Token, TokenPayload, UserCreate, UserOut, UserUpdate
+from app.schemas.website import WebsiteChatRequest, WebsiteChatResponse

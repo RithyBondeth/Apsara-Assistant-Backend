@@ -1,4 +1,5 @@
 from app.models.attachment import Attachment
+from app.models.auth_token import AuthToken
 from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.message import Message
@@ -11,6 +12,7 @@ from app.models.webhook_event import WebhookEvent
 
 __all__ = [
     "User",
+    "AuthToken",
     "Customer",
     "Product",
     "Conversation",

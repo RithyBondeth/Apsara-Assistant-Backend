@@ -8,7 +8,7 @@ from sqlalchemy.orm import relationship
 from app.core.crypto import EncryptedString
 from app.database import Base
 
-# platform: messenger, telegram, tiktok, website
+# platform: telegram, messenger, instagram, website
 
 
 class PlatformIntegration(Base):

@@ -21,7 +21,9 @@ from app.services import messenger, telegram
 
 router = APIRouter()
 
-SUPPORTED_PLATFORMS = {"telegram", "messenger"}  # tiktok lands in a later phase
+SUPPORTED_PLATFORMS = {"telegram", "messenger", "instagram", "website"}
+# Meta platforms verify inbound webhooks with the app secret
+_META_PLATFORMS = {"messenger", "instagram"}
 
 
 @router.get("/", response_model=list[IntegrationOut])
@@ -49,10 +51,10 @@ def create_integration(
             detail=f"Unsupported platform. Supported: {', '.join(sorted(SUPPORTED_PLATFORMS))}",
         )
 
-    if payload.platform == "messenger" and not payload.app_secret:
+    if payload.platform in _META_PLATFORMS and not payload.app_secret:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="app_secret is required for Messenger integrations",
+            detail=f"app_secret is required for {payload.platform.title()} integrations",
         )
 
     integration = PlatformIntegration(
@@ -163,6 +165,27 @@ async def register_webhook(
             webhook_url=webhook_url,
             ok=bool(result.get("success")),
             detail="Set this URL + verify token in the Meta App dashboard, then subscribe the page.",
+        )
+
+    if integration.platform == "instagram":
+        # Instagram (Instagram-login) webhooks are configured in the Meta App
+        # dashboard: set the callback URL + verify token below and subscribe the
+        # Instagram account to the `messages` field. No server-side call needed.
+        return WebhookRegisterOut(
+            webhook_url=webhook_url,
+            ok=True,
+            detail=(
+                "Set this URL + verify token in the Meta App dashboard (Instagram "
+                "webhooks) and subscribe the account to the 'messages' field."
+            ),
+        )
+
+    if integration.platform == "website":
+        # Nothing to register externally — the on-site widget POSTs here directly.
+        return WebhookRegisterOut(
+            webhook_url=webhook_url,
+            ok=True,
+            detail="Point your website widget's POST requests to this URL.",
         )
 
     raise HTTPException(

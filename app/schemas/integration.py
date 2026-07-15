@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 
 class IntegrationCreate(BaseModel):
-    platform: str  # telegram | messenger (tiktok in a later phase)
+    platform: str  # telegram | messenger | instagram | website
     access_token: str  # bot token / page access token
     external_id: str | None = None  # Messenger: the Page id
     secret_token: str | None = None  # Telegram secret_token / Messenger verify token

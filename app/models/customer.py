@@ -16,7 +16,7 @@ class Customer(Base):
     name = Column(String, nullable=False)
     phone = Column(String)
     email = Column(String)
-    # Platform the customer contacted from: messenger, telegram, tiktok, website
+    # Platform the customer contacted from: telegram, messenger, instagram, website
     platform = Column(String)
     platform_id = Column(String, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)

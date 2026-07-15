@@ -6,6 +6,7 @@ import hmac
 import json
 
 import app.services.chat_service as chat_service
+import app.services.instagram as instagram_service
 import app.services.messenger as messenger_service
 import app.services.telegram as telegram_service
 
@@ -156,6 +157,85 @@ def test_messenger_webhook_resolves_real_customer_name(auth_client, monkeypatch)
     assert len(customers) == 1
     assert customers[0]["name"] == "Sok Dara"
     assert customers[0]["platform_id"] == "PSID123"
+
+
+def test_instagram_webhook_end_to_end(auth_client, monkeypatch):
+    client, _token, _uid = auth_client
+    r = client.post(
+        "/api/v1/integrations/",
+        json={
+            "platform": "instagram",
+            "access_token": "ig-token",
+            "secret_token": "ig-verify",
+            "app_secret": "ig-app-secret",
+        },
+    )
+    assert r.status_code == 201, r.text
+    integration_id = r.json()["id"]
+
+    async def fake_ai(messages):
+        return "សួស្តី"
+
+    sent = []
+
+    async def fake_send(access_token, recipient_id, text):
+        sent.append((recipient_id, text))
+
+    async def fake_profile(access_token, igsid):
+        return "Insta Dara"
+
+    monkeypatch.setattr(chat_service, "generate_ai_reply", fake_ai)
+    monkeypatch.setattr(instagram_service, "send_message", fake_send)
+    monkeypatch.setattr(instagram_service, "get_profile_name", fake_profile)
+
+    payload = {"object": "instagram", "entry": [{"messaging": [
+        {"sender": {"id": "IGSID9"}, "message": {"mid": "ig1", "text": "hello"}}
+    ]}]}
+    raw = json.dumps(payload).encode()
+    sig = "sha256=" + hmac.new(b"ig-app-secret", raw, hashlib.sha256).hexdigest()
+
+    resp = client.post(
+        f"/api/v1/webhooks/instagram/{integration_id}",
+        content=raw,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    assert resp.text == "EVENT_RECEIVED"
+    assert sent == [("IGSID9", "សួស្តី")]
+
+    # customer created with the resolved IG name; conversation platform = instagram
+    customers = client.get("/api/v1/customers/").json()
+    assert customers[0]["name"] == "Insta Dara"
+    convs = client.get("/api/v1/conversations/").json()
+    assert convs[0]["platform"] == "instagram"
+
+
+def test_instagram_webhook_bad_signature_rejected(auth_client):
+    client, _token, _uid = auth_client
+    integration_id = client.post(
+        "/api/v1/integrations/",
+        json={
+            "platform": "instagram",
+            "access_token": "ig-token",
+            "secret_token": "ig-verify",
+            "app_secret": "ig-app-secret",
+        },
+    ).json()["id"]
+    resp = client.post(
+        f"/api/v1/webhooks/instagram/{integration_id}",
+        content=b'{"object":"instagram","entry":[]}',
+        headers={"X-Hub-Signature-256": "sha256=bad", "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 403
+
+
+def test_instagram_requires_app_secret(auth_client):
+    client, _token, _uid = auth_client
+    r = client.post(
+        "/api/v1/integrations/",
+        json={"platform": "instagram", "access_token": "ig-token", "secret_token": "v"},
+    )
+    assert r.status_code == 400
 
 
 def test_messenger_verify_handshake(auth_client):

@@ -23,6 +23,28 @@ class PasswordChange(BaseModel):
     new_password: str = Field(min_length=8)
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+
+
+class OTPRequest(BaseModel):
+    email: EmailStr
+
+
+class OTPVerify(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=4, max_length=12)
+
+
+class MessageResponse(BaseModel):
+    message: str
+
+
 class UserOut(BaseModel):
     id: UUID
     email: str

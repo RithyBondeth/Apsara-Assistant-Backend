@@ -6,18 +6,35 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.config import settings
+from app.core.rate_limit import SlidingWindowRateLimiter, client_ip
 from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.platform_integration import PlatformIntegration
 from app.models.webhook_event import WebhookEvent
-from app.services import messenger, telegram
+from app.schemas.website import WebsiteChatRequest, WebsiteChatResponse
+from app.services import instagram, messenger, telegram
 from app.services.chat_service import generate_reply
 from app.services.messaging import InboundMessage
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Throttles the public website widget endpoint (paid AI calls). Per-process.
+website_limiter = SlidingWindowRateLimiter(
+    max_requests=settings.WEBSITE_RATE_LIMIT,
+    window_seconds=settings.WEBSITE_RATE_WINDOW_SECONDS,
+)
+
+# Meta platforms whose webhooks only carry an opaque sender id, so the real
+# display name must be fetched when a customer is first seen. Mapped to the
+# service module (not the function) so the lookup happens at call time.
+_PROFILE_SERVICES = {
+    "messenger": messenger,
+    "instagram": instagram,
+}
 
 
 def _get_active_integration(db: Session, integration_id: UUID, platform: str) -> PlatformIntegration:
@@ -113,10 +130,11 @@ async def _reply_to_inbound(
     customer = _find_customer(db, integration.user_id, platform, inbound.external_user_id)
     if customer is None:
         name = inbound.sender_name
-        # Messenger webhooks only carry the PSID, so look up the real name once,
+        # Meta platforms only carry an opaque id, so look up the real name once,
         # when the customer is first seen.
-        if platform == "messenger":
-            resolved = await messenger.get_profile_name(
+        profile_service = _PROFILE_SERVICES.get(platform)
+        if profile_service is not None:
+            resolved = await profile_service.get_profile_name(
                 integration.access_token, inbound.external_user_id
             )
             name = resolved or name
@@ -187,6 +205,36 @@ async def messenger_verify(
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Verification failed")
 
 
+async def _process_meta_webhook(
+    db: Session,
+    integration: PlatformIntegration,
+    request: Request,
+    signature: str | None,
+    service,  # messenger or instagram module (same verify/parse/send interface)
+) -> Response:
+    """Shared handler for Meta platforms (Messenger, Instagram).
+
+    Both use the same HMAC signature, webhook shape, and expect a plain
+    "EVENT_RECEIVED" ack. Only the send transport (``service``) differs.
+    """
+    raw_body = await request.body()
+    if not service.verify_signature(integration.app_secret, raw_body, signature):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
+
+    for inbound in service.parse_updates(await request.json()):
+        reply = await _reply_to_inbound(db, integration, inbound)
+        if reply is None:
+            continue
+        try:
+            await service.send_message(integration.access_token, inbound.external_user_id, reply)
+        except Exception:
+            logger.exception(
+                "Failed to send %s reply for integration %s", integration.platform, integration.id
+            )
+
+    return Response(content="EVENT_RECEIVED", media_type="text/plain")
+
+
 @router.post("/messenger/{integration_id}")
 async def messenger_webhook(
     integration_id: UUID,
@@ -196,24 +244,85 @@ async def messenger_webhook(
 ):
     """Receive Messenger events for one seller's page and auto-reply."""
     integration = _get_active_integration(db, integration_id, "messenger")
+    return await _process_meta_webhook(db, integration, request, x_hub_signature_256, messenger)
 
-    raw_body = await request.body()
-    if not messenger.verify_signature(integration.app_secret, raw_body, x_hub_signature_256):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
 
-    payload = await request.json()
-    inbound_messages = messenger.parse_updates(payload)
+@router.get("/instagram/{integration_id}")
+async def instagram_verify(
+    integration_id: UUID,
+    db: Session = Depends(get_db),
+    hub_mode: str | None = Query(default=None, alias="hub.mode"),
+    hub_verify_token: str | None = Query(default=None, alias="hub.verify_token"),
+    hub_challenge: str | None = Query(default=None, alias="hub.challenge"),
+):
+    """Instagram subscription handshake: echo hub.challenge when the token matches."""
+    integration = _get_active_integration(db, integration_id, "instagram")
+    if hub_mode == "subscribe" and hub_verify_token == integration.secret_token:
+        return Response(content=hub_challenge or "", media_type="text/plain")
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Verification failed")
 
-    handled = 0
-    for inbound in inbound_messages:
-        reply = await _reply_to_inbound(db, integration, inbound)
-        if reply is None:
-            continue
-        try:
-            await messenger.send_message(integration.access_token, inbound.external_user_id, reply)
-            handled += 1
-        except Exception:
-            logger.exception("Failed to send messenger reply for integration %s", integration_id)
 
-    # Messenger expects a 200 with "EVENT_RECEIVED" to stop retries
-    return Response(content="EVENT_RECEIVED", media_type="text/plain")
+@router.post("/instagram/{integration_id}")
+async def instagram_webhook(
+    integration_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    x_hub_signature_256: str | None = Header(default=None),
+):
+    """Receive Instagram DM events for one seller's account and auto-reply."""
+    integration = _get_active_integration(db, integration_id, "instagram")
+    return await _process_meta_webhook(db, integration, request, x_hub_signature_256, instagram)
+
+
+def _enforce_website_origin(integration: PlatformIntegration, request: Request) -> None:
+    """If the integration configures an origin allowlist, enforce it.
+
+    For website integrations, ``secret_token`` may hold a comma-separated list
+    of allowed origins (e.g. "https://shop.example.com"). When set, the request
+    Origin must match — a server-side guard beyond browser CORS, since a public
+    endpoint triggers paid AI calls.
+    """
+    allow = integration.secret_token
+    if not allow:
+        return  # no allowlist configured — open (dev / trusted use)
+    allowed = {o.strip() for o in allow.split(",") if o.strip()}
+    origin = request.headers.get("origin")
+    if origin not in allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Origin not allowed")
+
+
+@router.post("/website/{integration_id}", response_model=WebsiteChatResponse)
+async def website_chat(
+    integration_id: UUID,
+    payload: WebsiteChatRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Synchronous chat endpoint for the on-site widget.
+
+    Unlike the platform webhooks, the AI reply is returned directly in the HTTP
+    response (the browser widget shows it), so there is no outbound send step
+    and no redelivery to de-duplicate.
+    """
+    integration = _get_active_integration(db, integration_id, "website")
+    _enforce_website_origin(integration, request)
+
+    if not website_limiter.allow(f"{integration_id}:{client_ip(request)}"):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many requests — please slow down",
+        )
+
+    inbound = InboundMessage(
+        external_user_id=payload.session_id,
+        sender_name=payload.name or "Website visitor",
+        text=payload.message,
+        event_id=None,  # synchronous — nothing to dedupe
+    )
+    reply = await _reply_to_inbound(db, integration, inbound)
+    if reply is None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Assistant is temporarily unavailable",
+        )
+    return WebsiteChatResponse(reply=reply)

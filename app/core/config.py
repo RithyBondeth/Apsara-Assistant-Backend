@@ -19,6 +19,26 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days
 
+    # ── Password reset & OTP login ───────────────────────────────────────────
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 60
+    OTP_EXPIRE_MINUTES: int = 10
+    OTP_MAX_ATTEMPTS: int = 5           # wrong-code guesses before a code is burned
+    # Throttle the unauthenticated "send me a link/code" endpoints, per client IP.
+    AUTH_RATE_LIMIT: int = 5
+    AUTH_RATE_WINDOW_SECONDS: int = 300
+    # Base URL of the web app, used to build the password-reset link in emails.
+    FRONTEND_BASE_URL: str = "http://localhost:3000"
+
+    # ── Email delivery (SMTP) ────────────────────────────────────────────────
+    # When SMTP_HOST is blank, transactional emails (reset links, OTP codes) are
+    # logged instead of sent — convenient for local dev. Set these in production.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_USE_TLS: bool = True
+    EMAIL_FROM: str = "Apsara Assistant <no-reply@apsara.example.com>"
+
     # Fernet key for encrypting stored secrets (integration tokens) at rest.
     # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     # If blank, a key is derived from SECRET_KEY (fine for dev; set an explicit
@@ -31,6 +51,10 @@ class Settings(BaseSettings):
     # ── Public URL (used to build platform webhook callback URLs) ────────────
     # e.g. https://api.apsara.example.com
     PUBLIC_BASE_URL: str = ""
+
+    # ── Rate limiting (public website widget endpoint) ──────────────────────
+    WEBSITE_RATE_LIMIT: int = 20          # max requests per window, per (integration, IP)
+    WEBSITE_RATE_WINDOW_SECONDS: int = 60
 
     # ── CORS ─────────────────────────────────────────────────────────────────
     # Comma-separated list of allowed frontend origins, e.g.
@@ -70,6 +94,10 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"
+
+    @property
+    def smtp_enabled(self) -> bool:
+        return bool(self.SMTP_HOST)
 
 
 settings = Settings()

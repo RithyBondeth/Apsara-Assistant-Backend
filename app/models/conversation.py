@@ -8,7 +8,7 @@ from sqlalchemy.orm import relationship
 from app.database import Base
 
 # status: open, closed, pending
-# platform: messenger, telegram, tiktok, website
+# platform: telegram, messenger, instagram, website
 
 
 class Conversation(Base):
