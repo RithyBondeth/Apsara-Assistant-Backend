@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.config import settings
+from app.core.platforms import META_PLATFORMS, SUPPORTED_PLATFORMS, platform_list
 from app.database import get_db
 from app.models.platform_integration import PlatformIntegration
 from app.models.user import User
@@ -20,10 +21,6 @@ from app.schemas.integration import (
 from app.services import messenger, telegram
 
 router = APIRouter()
-
-SUPPORTED_PLATFORMS = {"telegram", "messenger", "instagram", "website"}
-# Meta platforms verify inbound webhooks with the app secret
-_META_PLATFORMS = {"messenger", "instagram"}
 
 
 @router.get("/", response_model=list[IntegrationOut])
@@ -48,10 +45,10 @@ def create_integration(
     if payload.platform not in SUPPORTED_PLATFORMS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported platform. Supported: {', '.join(sorted(SUPPORTED_PLATFORMS))}",
+            detail=f"Unsupported platform. Supported: {platform_list()}",
         )
 
-    if payload.platform in _META_PLATFORMS and not payload.app_secret:
+    if payload.platform in META_PLATFORMS and not payload.app_secret:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"app_secret is required for {payload.platform.title()} integrations",

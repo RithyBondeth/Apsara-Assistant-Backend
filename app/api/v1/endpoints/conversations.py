@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
+from app.core.platforms import SUPPORTED_PLATFORMS, platform_list
 from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.customer import Customer
@@ -51,6 +52,12 @@ def create_conversation(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if payload.platform not in SUPPORTED_PLATFORMS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported platform. Supported: {platform_list()}",
+        )
+
     customer = db.query(Customer).filter(
         Customer.id == payload.customer_id, Customer.user_id == current_user.id
     ).first()

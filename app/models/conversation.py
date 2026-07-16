@@ -24,5 +24,13 @@ class Conversation(Base):
 
     user = relationship("User", back_populates="conversations")
     customer = relationship("Customer", back_populates="conversations")
-    messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
+    # Ordered here so every load is chronological — the conversation-detail
+    # endpoint joinedloads this relationship and would otherwise render the
+    # thread in arbitrary database order.
+    messages = relationship(
+        "Message",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="Message.created_at",
+    )
     orders = relationship("Order", back_populates="conversation")
