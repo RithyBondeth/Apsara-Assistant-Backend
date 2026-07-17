@@ -82,7 +82,7 @@ def test_telegram_webhook_is_idempotent_on_redelivery(auth_client, monkeypatch):
     second = client.post(f"/api/v1/webhooks/telegram/{integration_id}", json=update, headers=headers)
 
     assert first.json() == {"ok": True, "handled": True}
-    assert second.json() == {"ok": True, "handled": False}  # deduped
+    assert second.json() == {"ok": True, "handled": False, "paused": False}  # deduped
 
     # Only one reply sent, and the conversation has exactly 2 messages (not 4)
     assert len(sent) == 1

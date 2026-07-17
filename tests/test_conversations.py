@@ -57,24 +57,22 @@ def test_conversation_detail_returns_messages_chronologically(auth_client, db_se
         json={"customer_id": customer_id, "platform": "website"},
     ).json()["id"]
 
-    inserted = ["fourth", "third", "second", "first"]
-    for content in inserted:
-        r = client.post(
-            f"/api/v1/conversations/{conv_id}/messages",
-            json={
-                "conversation_id": conv_id,
-                "sender_type": "customer",
-                "content": content,
-            },
-        )
-        assert r.status_code == 201, r.text
-
-    # Stamp created_at so the newest row was inserted first.
+    # Built directly rather than through POST /messages: that endpoint is the
+    # seller-takeover path now and would try to deliver each one to a platform.
+    # Insertion order is the reverse of chronological, and created_at is stamped
+    # explicitly, so SQLite's rowid order can't accidentally satisfy the assert.
     base = datetime(2026, 7, 16, 9, 0, 0)
-    rows = db_session.query(Message).filter(Message.conversation_id == UUID(conv_id)).all()
-    by_content = {m.content: m for m in rows}
-    for offset, content in enumerate(["first", "second", "third", "fourth"]):
-        by_content[content].created_at = base + timedelta(minutes=offset)
+    minutes = {"first": 0, "second": 1, "third": 2, "fourth": 3}
+    for content in ["fourth", "third", "second", "first"]:
+        db_session.add(
+            Message(
+                conversation_id=UUID(conv_id),
+                sender_type="customer",
+                message_type="text",
+                content=content,
+                created_at=base + timedelta(minutes=minutes[content]),
+            )
+        )
     db_session.commit()
 
     detail = client.get(f"/api/v1/conversations/{conv_id}").json()

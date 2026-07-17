@@ -12,6 +12,9 @@ class DashboardStats(BaseModel):
     customers: int
     conversations: int
     open_conversations: int
+    # Threads waiting on the seller: the AI escalated or failed, or the customer
+    # has replied since they last looked. Drives the sidebar badge.
+    needs_me_conversations: int
     orders: int
     pending_orders: int
     revenue: Decimal       # sum of non-cancelled order totals

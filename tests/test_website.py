@@ -38,7 +38,7 @@ def test_website_chat_returns_reply_synchronously(auth_client, monkeypatch):
         json={"session_id": "sess-1", "message": "hi", "name": "Visitor A"},
     )
     assert r.status_code == 200
-    assert r.json() == {"reply": "How can I help you?"}
+    assert r.json() == {"reply": "How can I help you?", "paused": False}
 
     # a website customer + conversation were created and persisted
     customers = client.get("/api/v1/customers/").json()

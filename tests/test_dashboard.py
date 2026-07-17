@@ -12,6 +12,7 @@ def test_stats_empty(auth_client):
         "customers": 0,
         "conversations": 0,
         "open_conversations": 0,
+        "needs_me_conversations": 0,
         "orders": 0,
         "pending_orders": 0,
         "revenue": "0",

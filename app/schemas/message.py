@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -17,8 +18,15 @@ class AttachmentOut(BaseModel):
 
 
 class MessageCreate(BaseModel):
-    conversation_id: UUID
-    sender_type: str
+    """A seller's own reply, typed in the dashboard inbox.
+
+    ``sender_type`` is fixed to "seller": the customer's messages arrive from
+    their platform and the AI's come from the pipeline, so letting an authed
+    caller pick any value here would only allow fabricating either side of a
+    real customer's transcript.
+    """
+
+    sender_type: Literal["seller"] = "seller"
     message_type: str = "text"
     content: str | None = None
 

@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
@@ -20,8 +21,27 @@ from app.schemas.conversation import (
     ConversationUpdate,
 )
 from app.schemas.message import MessageCreate, MessageOut
+from app.services import outbound
 
 router = APIRouter()
+
+
+def _needs_me_clause():
+    """SQL form of "the seller has to deal with this": escalated, or unread.
+
+    This duplicates ``Conversation.unread``, which is a Python property and so
+    can't be used in a WHERE clause. The two must agree —
+    ``test_attention.py::test_sql_filter_matches_the_unread_property`` fails if
+    they ever drift apart.
+    """
+    unread = and_(
+        Conversation.last_customer_message_at.isnot(None),
+        or_(
+            Conversation.last_seen_at.is_(None),
+            Conversation.last_customer_message_at > Conversation.last_seen_at,
+        ),
+    )
+    return or_(Conversation.needs_attention.is_(True), unread)
 
 
 # ── Conversations ─────────────────────────────────────────────────────────────
@@ -33,6 +53,11 @@ def list_conversations(
     status: str | None = Query(default=None),
     platform: str | None = Query(default=None),
     customer_id: UUID | None = Query(default=None),
+    needs_me: bool = Query(
+        default=False,
+        description="Only threads the seller has to deal with: the AI escalated "
+        "or failed, or the customer has said something since they last looked.",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -43,7 +68,36 @@ def list_conversations(
         query = query.filter(Conversation.platform == platform)
     if customer_id:
         query = query.filter(Conversation.customer_id == customer_id)
+    if needs_me:
+        query = query.filter(_needs_me_clause())
     return query.order_by(Conversation.updated_at.desc()).offset(skip).limit(limit).all()
+
+
+@router.post("/{conversation_id}/seen", response_model=ConversationOut)
+def mark_seen(
+    conversation_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Clear the unread mark — the seller has this thread open.
+
+    Its own endpoint rather than a side effect of GET: fetching a conversation
+    shouldn't mutate it, or a prefetch would silently mark it read.
+
+    Clears needs_attention too: the escalation has been seen, and leaving it
+    set would make the "needs you" list permanent and therefore ignored.
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id, Conversation.user_id == current_user.id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    conversation.last_seen_at = datetime.utcnow()
+    conversation.needs_attention = False
+    db.commit()
+    db.refresh(conversation)
+    return conversation
 
 
 @router.post("/", response_model=ConversationOut, status_code=201)
@@ -165,12 +219,17 @@ def list_messages(
 
 
 @router.post("/{conversation_id}/messages", response_model=MessageOut, status_code=201)
-def send_message(
+async def send_message(
     conversation_id: UUID,
     payload: MessageCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Send the seller's own reply to the customer (human takeover).
+
+    Delivery happens before the message is persisted, so a reply that never
+    reached the customer never appears in the seller's inbox either.
+    """
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id, Conversation.user_id == current_user.id
     ).first()
@@ -180,11 +239,24 @@ def send_message(
     if conversation.status == "closed":
         raise HTTPException(status_code=400, detail="Cannot send messages to a closed conversation")
 
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    customer = db.query(Customer).filter(Customer.id == conversation.customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    try:
+        await outbound.send_to_customer(db, conversation, customer, content)
+    except outbound.OutboundError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
     message = Message(
         conversation_id=conversation_id,
         sender_type=payload.sender_type,
         message_type=payload.message_type,
-        content=payload.content,
+        content=content,
     )
     db.add(message)
     conversation.updated_at = datetime.utcnow()

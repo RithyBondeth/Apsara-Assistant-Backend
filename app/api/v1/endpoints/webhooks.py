@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
@@ -11,11 +12,12 @@ from app.core.rate_limit import SlidingWindowRateLimiter, client_ip
 from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.customer import Customer
+from app.models.message import Message
 from app.models.platform_integration import PlatformIntegration
 from app.models.webhook_event import WebhookEvent
 from app.schemas.website import WebsiteChatRequest, WebsiteChatResponse
-from app.services import instagram, messenger, telegram
-from app.services.chat_service import generate_reply
+from app.services import instagram, media, messenger, telegram
+from app.services.chat_service import generate_reply, persist_customer_message
 from app.services.messaging import InboundMessage
 
 logger = logging.getLogger(__name__)
@@ -71,11 +73,14 @@ def _create_customer(
 
 
 def _get_or_create_conversation(
-    db: Session, user_id: UUID, customer_id: UUID, platform: str
+    db: Session, user_id: UUID, customer_id: UUID, platform: str, integration_id: UUID
 ) -> Conversation:
     conversation = (
         db.query(Conversation)
-        .options(joinedload(Conversation.messages))
+        # Attachments come with the messages: the AI pipeline reads them to
+        # re-send recent photos, and lazy-loading would issue one query per
+        # message in the history window.
+        .options(joinedload(Conversation.messages).joinedload(Message.attachments))
         .filter(
             Conversation.user_id == user_id,
             Conversation.customer_id == customer_id,
@@ -85,9 +90,18 @@ def _get_or_create_conversation(
         .first()
     )
     if conversation:
+        # Backfill for threads that predate the column, so a seller's reply can
+        # be routed back through the bot the customer actually messaged.
+        if conversation.integration_id is None:
+            conversation.integration_id = integration_id
         return conversation
 
-    conversation = Conversation(user_id=user_id, customer_id=customer_id, platform=platform)
+    conversation = Conversation(
+        user_id=user_id,
+        customer_id=customer_id,
+        platform=platform,
+        integration_id=integration_id,
+    )
     db.add(conversation)
     db.flush()
     return conversation
@@ -114,18 +128,31 @@ def _claim_event(db: Session, integration_id: UUID, event_id: str | None) -> boo
     return True
 
 
+@dataclass
+class InboundResult:
+    """Outcome of handling one inbound message.
+
+    ``reply`` is only set when the AI actually answered. ``paused`` separates
+    "a human is handling this, stay quiet" from a genuine failure, which the
+    website widget needs to tell apart so it doesn't show visitors an error.
+    """
+
+    reply: str | None = None
+    paused: bool = False
+
+
 async def _reply_to_inbound(
     db: Session, integration: PlatformIntegration, inbound: InboundMessage
-) -> str | None:
-    """Run the AI pipeline for one inbound message; return the reply text.
+) -> InboundResult:
+    """Run the AI pipeline for one inbound message.
 
-    Returns None if the event is a duplicate or the AI/DB step fails (both
-    logged), so the caller can ack the webhook without sending anything.
+    Returns an empty result if the event is a duplicate or the AI/DB step fails
+    (both logged), so the caller can ack the webhook without sending anything.
     """
     platform = integration.platform
     if not _claim_event(db, integration.id, inbound.event_id):
         logger.info("Skipping duplicate %s event %s", platform, inbound.event_id)
-        return None
+        return InboundResult()
 
     customer = _find_customer(db, integration.user_id, platform, inbound.external_user_id)
     if customer is None:
@@ -142,15 +169,47 @@ async def _reply_to_inbound(
             db, integration.user_id, platform, inbound.external_user_id, name
         )
 
-    conversation = _get_or_create_conversation(db, integration.user_id, customer.id, platform)
+    conversation = _get_or_create_conversation(
+        db, integration.user_id, customer.id, platform, integration.id
+    )
+
+    # Copy any photo onto our own storage before it touches the DB: the
+    # platform's own link either carries the bot token or expires.
+    image_url: str | None = None
+    if inbound.has_image:
+        try:
+            image_url = await media.store_inbound_image(
+                platform, integration.access_token, inbound.image_ref
+            )
+        except media.MediaError:
+            # Fall through as a text-only message. Losing the photo is bad;
+            # dropping the customer's message entirely would be worse.
+            logger.exception(
+                "Could not store inbound %s image for integration %s",
+                platform,
+                integration.id,
+            )
+
+    # A human has taken this thread over — record what the customer said, but
+    # don't let the bot answer over the top of them.
+    if not conversation.ai_enabled:
+        try:
+            persist_customer_message(db, conversation, inbound.text, image_url=image_url)
+        except Exception:
+            logger.exception(
+                "Failed to record inbound message for paused conversation %s",
+                conversation.id,
+            )
+        return InboundResult(paused=True)
+
     try:
         _customer_msg, ai_msg = await generate_reply(
-            db, conversation, integration.user, inbound.text
+            db, conversation, integration.user, inbound.text, image_url=image_url
         )
     except Exception:
         logger.exception("AI pipeline failed for %s integration %s", platform, integration.id)
-        return None
-    return ai_msg.content
+        return InboundResult()
+    return InboundResult(reply=ai_msg.content)
 
 
 @router.post("/telegram/{integration_id}")
@@ -177,13 +236,17 @@ async def telegram_webhook(
         # Non-text / unsupported update — ack so Telegram stops retrying
         return {"ok": True, "handled": False}
 
-    reply = await _reply_to_inbound(db, integration, inbound)
-    if reply is None:
-        # Ack anyway; retrying won't help an AI/DB failure and would double-post
-        return {"ok": True, "handled": False}
+    result = await _reply_to_inbound(db, integration, inbound)
+    if result.reply is None:
+        # Ack anyway; retrying won't help an AI/DB failure and would double-post.
+        # A paused conversation lands here too — the message is recorded, the
+        # bot just stays quiet so the seller can answer it themselves.
+        return {"ok": True, "handled": False, "paused": result.paused}
 
     try:
-        await telegram.send_message(integration.access_token, inbound.external_user_id, reply)
+        await telegram.send_message(
+            integration.access_token, inbound.external_user_id, result.reply
+        )
     except Exception:
         logger.exception("Failed to send telegram reply for integration %s", integration_id)
 
@@ -222,11 +285,13 @@ async def _process_meta_webhook(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
 
     for inbound in service.parse_updates(await request.json()):
-        reply = await _reply_to_inbound(db, integration, inbound)
-        if reply is None:
-            continue
+        result = await _reply_to_inbound(db, integration, inbound)
+        if result.reply is None:
+            continue  # duplicate, failure, or a thread a human has taken over
         try:
-            await service.send_message(integration.access_token, inbound.external_user_id, reply)
+            await service.send_message(
+                integration.access_token, inbound.external_user_id, result.reply
+            )
         except Exception:
             logger.exception(
                 "Failed to send %s reply for integration %s", integration.platform, integration.id
@@ -319,10 +384,15 @@ async def website_chat(
         text=payload.message,
         event_id=None,  # synchronous — nothing to dedupe
     )
-    reply = await _reply_to_inbound(db, integration, inbound)
-    if reply is None:
+    result = await _reply_to_inbound(db, integration, inbound)
+    if result.paused:
+        # The seller is handling this visitor themselves. Their message is
+        # recorded; the widget has no channel to push a human reply back down,
+        # so tell it to stop expecting one rather than showing an error.
+        return WebsiteChatResponse(reply=None, paused=True)
+    if result.reply is None:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Assistant is temporarily unavailable",
         )
-    return WebsiteChatResponse(reply=reply)
+    return WebsiteChatResponse(reply=result.reply)

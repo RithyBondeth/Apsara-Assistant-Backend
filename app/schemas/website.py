@@ -12,4 +12,8 @@ class WebsiteChatRequest(BaseModel):
 
 
 class WebsiteChatResponse(BaseModel):
-    reply: str
+    # Null when the seller has paused the AI for this visitor: the message is
+    # recorded, but there is no reply to show. The widget is request/response,
+    # so a human's answer can't be pushed back down this channel.
+    reply: str | None = None
+    paused: bool = False

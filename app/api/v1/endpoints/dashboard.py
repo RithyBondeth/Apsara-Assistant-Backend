@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.api.v1.endpoints.conversations import _needs_me_clause
 from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.customer import Customer
@@ -46,6 +47,13 @@ def get_stats(
         .filter(Conversation.user_id == uid, Conversation.status == "open")
         .scalar()
     )
+    # Reuses the conversations endpoint's clause so the badge count and the
+    # "Needs you" list can never disagree.
+    needs_me_conversations = (
+        db.query(func.count(Conversation.id))
+        .filter(Conversation.user_id == uid, _needs_me_clause())
+        .scalar()
+    )
     orders = db.query(func.count(Order.id)).filter(Order.user_id == uid).scalar()
     pending_orders = (
         db.query(func.count(Order.id))
@@ -63,6 +71,7 @@ def get_stats(
         customers=customers or 0,
         conversations=conversations or 0,
         open_conversations=open_conversations or 0,
+        needs_me_conversations=needs_me_conversations or 0,
         orders=orders or 0,
         pending_orders=pending_orders or 0,
         revenue=Decimal(revenue or 0),
