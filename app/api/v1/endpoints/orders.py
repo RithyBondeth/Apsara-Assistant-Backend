@@ -48,6 +48,7 @@ def list_orders(
     limit: int = 50,
     status: str | None = Query(default=None),
     customer_id: UUID | None = Query(default=None),
+    conversation_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -56,6 +57,9 @@ def list_orders(
         query = query.filter(Order.status == status)
     if customer_id:
         query = query.filter(Order.customer_id == customer_id)
+    if conversation_id:
+        # Lets the chat panel show the orders that came out of this thread.
+        query = query.filter(Order.conversation_id == conversation_id)
     return query.order_by(Order.created_at.desc()).offset(skip).limit(limit).all()
 
 

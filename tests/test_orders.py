@@ -101,3 +101,70 @@ def test_invalid_status_rejected(shop):
     ).json()["id"]
     r = client.patch(f"/api/v1/orders/{order_id}", json={"status": "teleported"})
     assert r.status_code == 400
+
+
+def test_order_links_to_a_conversation_and_is_listable_by_it(shop):
+    """The chat panel needs to find the orders that came out of a thread."""
+    client, customer_id, product_id = shop
+    conv_id = client.post(
+        "/api/v1/conversations/",
+        json={"customer_id": customer_id, "platform": "telegram"},
+    ).json()["id"]
+
+    r = client.post(
+        "/api/v1/orders/",
+        json={
+            "customer_id": customer_id,
+            "conversation_id": conv_id,
+            "items": [{"product_id": product_id, "quantity": 1}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["conversation_id"] == conv_id
+
+    # A second order NOT from this thread must not show up in its list.
+    client.post(
+        "/api/v1/orders/",
+        json={"customer_id": customer_id, "items": [{"product_id": product_id, "quantity": 1}]},
+    )
+
+    listed = client.get(f"/api/v1/orders/?conversation_id={conv_id}").json()
+    assert len(listed) == 1
+    assert listed[0]["conversation_id"] == conv_id
+
+
+def test_order_rejects_a_conversation_owned_by_someone_else(shop):
+    """conversation_id must belong to the seller — no linking to a stranger's
+    thread. The shared TestClient means we build the stranger's thread first,
+    then restore the owner's auth so the customer check passes and only the
+    conversation ownership is what can fail."""
+    client, customer_id, product_id = shop
+    owner_auth = dict(client.headers)
+
+    # A second seller with their own conversation.
+    client.post(
+        "/api/v1/auth/register",
+        json={"email": "other@shop.com", "password": "password123", "full_name": "Other"},
+    )
+    token = client.post(
+        "/api/v1/auth/login", data={"username": "other@shop.com", "password": "password123"}
+    ).json()["access_token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    other_customer = client.post("/api/v1/customers/", json={"name": "X"}).json()["id"]
+    stranger_conv = client.post(
+        "/api/v1/conversations/",
+        json={"customer_id": other_customer, "platform": "telegram"},
+    ).json()["id"]
+
+    # Back to the owner: their own customer, but the stranger's conversation.
+    client.headers.update(owner_auth)
+    r = client.post(
+        "/api/v1/orders/",
+        json={
+            "customer_id": customer_id,
+            "conversation_id": stranger_conv,
+            "items": [{"product_id": product_id, "quantity": 1}],
+        },
+    )
+    assert r.status_code == 404, r.text
+    assert "conversation" in r.json()["detail"].lower()
