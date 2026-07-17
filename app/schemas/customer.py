@@ -18,6 +18,10 @@ class CustomerUpdate(BaseModel):
     name: str | None = None
     phone: str | None = None
     email: str | None = None
+    # The edit form exposes these, so they have to be updatable — without them
+    # a seller could change the platform in the UI and have it silently dropped.
+    platform: str | None = None
+    platform_id: str | None = None
 
 
 class CustomerOut(BaseModel):
