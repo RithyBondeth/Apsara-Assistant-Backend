@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
+from app.core import errors
+from app.core.search import search_clause
 from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.customer import Customer
@@ -14,6 +16,7 @@ from app.models.order_item import OrderItem
 from app.models.product import Product
 from app.models.user import User
 from app.schemas.order import OrderCreate, OrderOut, OrderUpdate
+from app.schemas.pagination import LimitParam, Page, SkipParam, paginate
 
 router = APIRouter()
 
@@ -42,13 +45,14 @@ def _restock_order(db: Session, order: Order) -> None:
         product.stock += quantities[product.id]
 
 
-@router.get("/", response_model=list[OrderOut])
+@router.get("/", response_model=Page[OrderOut])
 def list_orders(
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = SkipParam(),
+    limit: int = LimitParam(),
     status: str | None = Query(default=None),
     customer_id: UUID | None = Query(default=None),
     conversation_id: UUID | None = Query(default=None),
+    search: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -60,7 +64,18 @@ def list_orders(
     if conversation_id:
         # Lets the chat panel show the orders that came out of this thread.
         query = query.filter(Order.conversation_id == conversation_id)
-    return query.order_by(Order.created_at.desc()).offset(skip).limit(limit).all()
+
+    # Sellers look an order up by who placed it, so search spans the customer.
+    # The join is applied only when searching — adding it unconditionally would
+    # drop orders whose customer row is missing.
+    match = search_clause(
+        search or "", Customer.name, Customer.phone, Order.delivery_address
+    )
+    if match is not None:
+        query = query.join(Customer, Order.customer_id == Customer.id).filter(match)
+
+    items, total = paginate(query.order_by(Order.created_at.desc()), skip, limit)
+    return Page(items=items, total=total)
 
 
 @router.post("/", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
@@ -70,16 +85,14 @@ def create_order(
     current_user: User = Depends(get_current_user),
 ):
     if not payload.items:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Order must contain at least one item"
-        )
+        raise errors.order_empty()
 
     # Verify the customer belongs to the seller
     customer = db.query(Customer).filter(
         Customer.id == payload.customer_id, Customer.user_id == current_user.id
     ).first()
     if not customer:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+        raise errors.customer_not_found()
 
     # Verify the conversation (if provided) belongs to the seller
     if payload.conversation_id is not None:
@@ -87,7 +100,7 @@ def create_order(
             Conversation.id == payload.conversation_id, Conversation.user_id == current_user.id
         ).first()
         if not conversation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+            raise errors.conversation_not_found()
 
     order = Order(
         user_id=current_user.id,
@@ -100,9 +113,7 @@ def create_order(
     )
 
     if any(item.quantity <= 0 for item in payload.items):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Item quantity must be positive"
-        )
+        raise errors.item_quantity_invalid()
 
     # Lock every product row up front (FOR UPDATE) so concurrent orders can't
     # oversell the same stock. Locking in a deterministic id order avoids
@@ -121,20 +132,11 @@ def create_order(
     for item in payload.items:
         product = products_by_id.get(item.product_id)
         if not product:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Product {item.product_id} not found",
-            )
+            raise errors.product_not_found()
         if not product.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Product '{product.name}' is not available",
-            )
+            raise errors.product_unavailable(product.name)
         if product.stock < item.quantity:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Insufficient stock for '{product.name}' (available: {product.stock})",
-            )
+            raise errors.insufficient_stock(product.name, product.stock)
 
         # Use the product's server-side price as the source of truth
         unit_price = product.price
@@ -168,7 +170,7 @@ def get_order(
         Order.id == order_id, Order.user_id == current_user.id
     ).first()
     if not order:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+        raise errors.order_not_found()
     return order
 
 
@@ -183,15 +185,12 @@ def update_order(
         Order.id == order_id, Order.user_id == current_user.id
     ).first()
     if not order:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+        raise errors.order_not_found()
 
     data = payload.model_dump(exclude_unset=True)
     new_status = data.get("status")
     if new_status is not None and new_status not in VALID_STATUSES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid status. Must be one of: {', '.join(sorted(VALID_STATUSES))}",
-        )
+        raise errors.invalid_order_status(', '.join(sorted(VALID_STATUSES)))
 
     # Return stock to inventory when an order transitions into "cancelled"
     if new_status == "cancelled" and order.status != "cancelled":
@@ -214,7 +213,7 @@ def delete_order(
         Order.id == order_id, Order.user_id == current_user.id
     ).first()
     if not order:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+        raise errors.order_not_found()
 
     # A cancelled order has already had its stock returned; don't restock twice
     if order.status != "cancelled":

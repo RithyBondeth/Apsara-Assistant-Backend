@@ -290,8 +290,8 @@ def test_customer_photo_reaches_the_ai_and_is_stored(auth_client, monkeypatch):
     assert {"type": "image_url", "image_url": {"url": HOSTED}} in last
 
     # ...and the seller's inbox shows it, hosted by us, not by Telegram.
-    conv = client.get("/api/v1/conversations/").json()[0]
-    msgs = client.get(f"/api/v1/conversations/{conv['id']}/messages").json()
+    conv = client.get("/api/v1/conversations/").json()["items"][0]
+    msgs = client.get(f"/api/v1/conversations/{conv['id']}/messages").json()["items"]
     photo = msgs[0]
     assert photo["message_type"] == "image"
     assert len(photo["attachments"]) == 1
@@ -332,7 +332,7 @@ def test_a_photo_that_cannot_be_stored_still_delivers_the_message(auth_client, m
     assert r.status_code == 200
     assert r.json()["handled"] is True
 
-    conv = client.get("/api/v1/conversations/").json()[0]
-    msgs = client.get(f"/api/v1/conversations/{conv['id']}/messages").json()
+    conv = client.get("/api/v1/conversations/").json()["items"][0]
+    msgs = client.get(f"/api/v1/conversations/{conv['id']}/messages").json()["items"]
     assert msgs[0]["content"] == "this one?"
     assert msgs[0]["attachments"] == []

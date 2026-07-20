@@ -41,12 +41,12 @@ def test_website_chat_returns_reply_synchronously(auth_client, monkeypatch):
     assert r.json() == {"reply": "How can I help you?", "paused": False}
 
     # a website customer + conversation were created and persisted
-    customers = client.get("/api/v1/customers/").json()
+    customers = client.get("/api/v1/customers/").json()["items"]
     assert customers[0]["name"] == "Visitor A"
     assert customers[0]["platform"] == "website"
-    convs = client.get("/api/v1/conversations/").json()
+    convs = client.get("/api/v1/conversations/").json()["items"]
     assert convs[0]["platform"] == "website"
-    msgs = client.get(f"/api/v1/conversations/{convs[0]['id']}/messages").json()
+    msgs = client.get(f"/api/v1/conversations/{convs[0]['id']}/messages").json()["items"]
     assert [m["sender_type"] for m in msgs] == ["customer", "assistant"]
 
 
@@ -64,9 +64,9 @@ def test_website_chat_reuses_conversation_per_session(auth_client, monkeypatch):
     client.post(url, json={"session_id": "sess-9", "message": "second"})
 
     # same session → one conversation, 4 messages (2 customer + 2 assistant)
-    convs = client.get("/api/v1/conversations/").json()
+    convs = client.get("/api/v1/conversations/").json()["items"]
     assert len(convs) == 1
-    msgs = client.get(f"/api/v1/conversations/{convs[0]['id']}/messages").json()
+    msgs = client.get(f"/api/v1/conversations/{convs[0]['id']}/messages").json()["items"]
     assert len(msgs) == 4
 
 

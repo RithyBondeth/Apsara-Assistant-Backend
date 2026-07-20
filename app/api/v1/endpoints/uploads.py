@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 
 from app.api.deps import get_current_user
+from app.core import errors
 from app.models.user import User
 from app.schemas.upload import UploadResult
 from app.services import cloudinary_service
@@ -21,30 +22,21 @@ async def upload_image(
 ):
     """Upload a product image to Cloudinary and return its hosted URL."""
     if not cloudinary_service.is_configured():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Image uploads are not configured on the server",
-        )
+        raise errors.uploads_not_configured()
 
     if file.content_type not in ALLOWED_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported image type. Allowed: {', '.join(sorted(ALLOWED_TYPES))}",
-        )
+        raise errors.unsupported_image_type(', '.join(sorted(ALLOWED_TYPES)))
 
     contents = await file.read()
     if len(contents) > MAX_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Image exceeds the 5 MB limit",
-        )
+        raise errors.image_too_large("5 MB")
     if not contents:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
+        raise errors.empty_file()
 
     try:
         result = await cloudinary_service.upload_image(contents, file.filename or "upload")
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Upload failed: {exc}")
+        raise errors.upload_failed(str(exc))
 
     return UploadResult(**result)
 
@@ -56,12 +48,9 @@ async def delete_image(
 ):
     """Delete a previously uploaded image from Cloudinary to avoid orphans."""
     if not cloudinary_service.is_configured():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Image uploads are not configured on the server",
-        )
+        raise errors.uploads_not_configured()
 
     try:
         await cloudinary_service.delete_image(public_id)
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Delete failed: {exc}")
+        raise errors.delete_failed(str(exc))

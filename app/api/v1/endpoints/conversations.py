@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
+from app.core import errors
 from app.core.platforms import SUPPORTED_PLATFORMS, platform_list
+from app.core.search import search_clause
 from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.customer import Customer
@@ -21,9 +23,15 @@ from app.schemas.conversation import (
     ConversationUpdate,
 )
 from app.schemas.message import MessageCreate, MessageOut
+from app.schemas.pagination import LimitParam, Page, SkipParam, paginate
 from app.services import outbound
 
 router = APIRouter()
+
+# How much of a thread the detail endpoint returns. Enough that a seller opening
+# a conversation sees the exchange in progress without paging, small enough that
+# a thread running for months can't turn one dashboard click into a huge query.
+MESSAGE_WINDOW = 30
 
 
 def _needs_me_clause():
@@ -46,13 +54,14 @@ def _needs_me_clause():
 
 # ── Conversations ─────────────────────────────────────────────────────────────
 
-@router.get("/", response_model=list[ConversationOut])
+@router.get("/", response_model=Page[ConversationOut])
 def list_conversations(
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = SkipParam(),
+    limit: int = LimitParam(),
     status: str | None = Query(default=None),
     platform: str | None = Query(default=None),
     customer_id: UUID | None = Query(default=None),
+    search: str | None = Query(default=None),
     needs_me: bool = Query(
         default=False,
         description="Only threads the seller has to deal with: the AI escalated "
@@ -70,7 +79,18 @@ def list_conversations(
         query = query.filter(Conversation.customer_id == customer_id)
     if needs_me:
         query = query.filter(_needs_me_clause())
-    return query.order_by(Conversation.updated_at.desc()).offset(skip).limit(limit).all()
+
+    # A thread has no title, so the only thing a seller can search it by is who
+    # they were talking to. Joined only when searching — an unconditional join
+    # would hide threads whose customer row has gone.
+    match = search_clause(search or "", Customer.name, Customer.platform_id)
+    if match is not None:
+        query = query.join(
+            Customer, Conversation.customer_id == Customer.id
+        ).filter(match)
+
+    items, total = paginate(query.order_by(Conversation.updated_at.desc()), skip, limit)
+    return Page(items=items, total=total)
 
 
 @router.post("/{conversation_id}/seen", response_model=ConversationOut)
@@ -91,7 +111,7 @@ def mark_seen(
         Conversation.id == conversation_id, Conversation.user_id == current_user.id
     ).first()
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise errors.conversation_not_found()
 
     conversation.last_seen_at = datetime.utcnow()
     conversation.needs_attention = False
@@ -107,16 +127,13 @@ def create_conversation(
     current_user: User = Depends(get_current_user),
 ):
     if payload.platform not in SUPPORTED_PLATFORMS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported platform. Supported: {platform_list()}",
-        )
+        raise errors.unsupported_platform(platform_list())
 
     customer = db.query(Customer).filter(
         Customer.id == payload.customer_id, Customer.user_id == current_user.id
     ).first()
     if not customer:
-        raise HTTPException(status_code=404, detail="Customer not found")
+        raise errors.customer_not_found()
 
     existing = db.query(Conversation).filter(
         Conversation.user_id == current_user.id,
@@ -146,13 +163,34 @@ def get_conversation(
 ):
     conversation = (
         db.query(Conversation)
-        .options(joinedload(Conversation.messages).joinedload(Message.attachments))
         .filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id)
         .first()
     )
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return conversation
+        raise errors.conversation_not_found()
+
+    # Take the NEWEST window by sorting descending, then flip back to
+    # chronological for display — ordering ascending with a limit would return
+    # the oldest messages, i.e. the wrong end of the thread.
+    recent = (
+        db.query(Message)
+        .options(joinedload(Message.attachments))
+        .filter(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.desc())
+        .limit(MESSAGE_WINDOW)
+        .all()
+    )
+    total = (
+        db.query(Message).filter(Message.conversation_id == conversation_id).count()
+    )
+
+    # Serialise the conversation WITHOUT the messages relationship — validating
+    # the ORM object directly would lazy-load every message and undo the window.
+    return ConversationDetailOut(
+        **ConversationOut.model_validate(conversation).model_dump(),
+        messages=[MessageOut.model_validate(m) for m in reversed(recent)],
+        message_total=total,
+    )
 
 
 @router.patch("/{conversation_id}", response_model=ConversationOut)
@@ -166,7 +204,7 @@ def update_conversation(
         Conversation.id == conversation_id, Conversation.user_id == current_user.id
     ).first()
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise errors.conversation_not_found()
 
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(conversation, field, value)
@@ -175,29 +213,25 @@ def update_conversation(
     return conversation
 
 
-@router.delete("/{conversation_id}", status_code=204)
-def delete_conversation(
-    conversation_id: UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    conversation = db.query(Conversation).filter(
-        Conversation.id == conversation_id, Conversation.user_id == current_user.id
-    ).first()
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
-    db.delete(conversation)  # messages cascade via the relationship
-    db.commit()
+# NOTE: there is deliberately no DELETE for a conversation.
+#
+# Deleting one CASCADEs every Message and Attachment in the thread and SET NULLs
+# `conversation_id` on any Order that came out of it — so it destroys the
+# customer's history *and* silently breaks the order→chat links, with no undo.
+# No UI ever called it, so removing it costs nothing today.
+#
+# `status` (open/pending/closed) is the archival action sellers actually want,
+# and it is already wired up. If a real delete is ever needed it should be a
+# soft delete, so the orders that reference the thread keep resolving.
 
 
 # ── Messages ──────────────────────────────────────────────────────────────────
 
-@router.get("/{conversation_id}/messages", response_model=list[MessageOut])
+@router.get("/{conversation_id}/messages", response_model=Page[MessageOut])
 def list_messages(
     conversation_id: UUID,
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = SkipParam(),
+    limit: int = LimitParam(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -205,17 +239,16 @@ def list_messages(
         Conversation.id == conversation_id, Conversation.user_id == current_user.id
     ).first()
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise errors.conversation_not_found()
 
-    return (
+    query = (
         db.query(Message)
         .options(joinedload(Message.attachments))
         .filter(Message.conversation_id == conversation_id)
         .order_by(Message.created_at.asc())
-        .offset(skip)
-        .limit(limit)
-        .all()
     )
+    items, total = paginate(query, skip, limit)
+    return Page(items=items, total=total)
 
 
 @router.post("/{conversation_id}/messages", response_model=MessageOut, status_code=201)
@@ -234,23 +267,23 @@ async def send_message(
         Conversation.id == conversation_id, Conversation.user_id == current_user.id
     ).first()
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise errors.conversation_not_found()
 
     if conversation.status == "closed":
-        raise HTTPException(status_code=400, detail="Cannot send messages to a closed conversation")
+        raise errors.conversation_closed()
 
     content = (payload.content or "").strip()
     if not content:
-        raise HTTPException(status_code=400, detail="Message cannot be empty")
+        raise errors.message_empty()
 
     customer = db.query(Customer).filter(Customer.id == conversation.customer_id).first()
     if not customer:
-        raise HTTPException(status_code=404, detail="Customer not found")
+        raise errors.customer_not_found()
 
     try:
         await outbound.send_to_customer(db, conversation, customer, content)
     except outbound.OutboundError as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        raise errors.delivery_failed(str(exc))
 
     message = Message(
         conversation_id=conversation_id,

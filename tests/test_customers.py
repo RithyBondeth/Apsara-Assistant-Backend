@@ -10,7 +10,7 @@ def test_create_customer_rejects_unsupported_platform(auth_client):
             "/api/v1/customers/", json={"name": "Chan Sopheak", "platform": platform}
         )
         assert r.status_code == 400, f"{platform!r} should be rejected: {r.text}"
-        assert "Unsupported platform" in r.json()["detail"]
+        assert r.json()["detail"]["code"] == "unsupported_platform"
 
 
 def test_create_customer_allows_supported_or_absent_platform(auth_client):

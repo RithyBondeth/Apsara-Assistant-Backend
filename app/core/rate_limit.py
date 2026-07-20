@@ -51,6 +51,17 @@ class SlidingWindowRateLimiter:
             if not dq:
                 del self._hits[k]
 
+    def reset(self, key: str) -> None:
+        """Forget one key's history.
+
+        Used after a successful sign-in: failed attempts should accumulate, but
+        proving you own the account clears the slate, so a legitimate user who
+        fumbles their password a few times and then gets it right isn't left
+        one attempt away from a 429 for the rest of the window.
+        """
+        with self._lock:
+            self._hits.pop(key, None)
+
     def clear(self) -> None:
         with self._lock:
             self._hits.clear()

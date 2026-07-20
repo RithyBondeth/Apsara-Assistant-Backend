@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core import errors
 from app.core.config import settings
 from app.core.rate_limit import SlidingWindowRateLimiter, client_ip
 from app.core.security import create_access_token, hash_password, verify_password
@@ -30,6 +31,17 @@ _send_limiter = SlidingWindowRateLimiter(
     settings.AUTH_RATE_LIMIT, settings.AUTH_RATE_WINDOW_SECONDS
 )
 
+# Sign-in throttles. See the LOGIN_* settings for why there are two buckets.
+_login_account_limiter = SlidingWindowRateLimiter(
+    settings.LOGIN_RATE_LIMIT, settings.LOGIN_RATE_WINDOW_SECONDS
+)
+_login_ip_limiter = SlidingWindowRateLimiter(
+    settings.LOGIN_IP_RATE_LIMIT, settings.LOGIN_RATE_WINDOW_SECONDS
+)
+_register_limiter = SlidingWindowRateLimiter(
+    settings.REGISTER_RATE_LIMIT, settings.REGISTER_RATE_WINDOW_SECONDS
+)
+
 # Generic response for the request endpoints — deliberately identical whether or
 # not the email matches an account, so the response never reveals who is registered.
 _GENERIC_SENT = MessageResponse(
@@ -38,9 +50,12 @@ _GENERIC_SENT = MessageResponse(
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def register(payload: UserCreate, db: Session = Depends(get_db)):
+def register(payload: UserCreate, request: Request, db: Session = Depends(get_db)):
+    if not _register_limiter.allow(client_ip(request)):
+        raise errors.too_many_requests()
+
     if db.query(User).filter(User.email == payload.email).first():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+        raise errors.email_already_registered()
 
     user = User(
         email=payload.email,
@@ -55,14 +70,32 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+def login(
+    request: Request,
+    form: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    # Both checks run BEFORE verify_password: bcrypt is intentionally slow, so an
+    # unthrottled login endpoint is a CPU-exhaustion vector as much as a
+    # credential-guessing one. Key the account bucket on the normalised email so
+    # varying the case can't mint a fresh bucket.
+    account_key = f"account:{form.username.strip().lower()}"
+    if not _login_ip_limiter.allow(client_ip(request)):
+        raise errors.too_many_requests()
+    if not _login_account_limiter.allow(account_key):
+        raise errors.too_many_requests()
+
     user = db.query(User).filter(User.email == form.username).first()
     if not user or not verify_password(form.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        raise errors.invalid_credentials()
 
     if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
+        raise errors.account_inactive()
 
+    # Correct credentials clear the account's failure history. The IP bucket is
+    # deliberately NOT reset — it exists to cap total unauthenticated bcrypt work
+    # from one host, which a valid login doesn't excuse.
+    _login_account_limiter.reset(account_key)
     return Token(access_token=create_access_token(str(user.id)))
 
 
@@ -91,19 +124,14 @@ def change_password(
     current_user: User = Depends(get_current_user),
 ):
     if not verify_password(payload.current_password, current_user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect"
-        )
+        raise errors.current_password_incorrect()
     current_user.password_hash = hash_password(payload.new_password)
     db.commit()
 
 
 def _throttle(request: Request) -> None:
     if not _send_limiter.allow(client_ip(request)):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many requests. Please try again later.",
-        )
+        raise errors.too_many_requests()
 
 
 @router.post("/forgot-password", response_model=MessageResponse)
@@ -125,10 +153,7 @@ def forgot_password(
 def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
     user = auth_tokens.redeem_password_reset(db, payload.token)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This reset link is invalid or has expired.",
-        )
+        raise errors.invalid_or_expired_reset_link()
     user.password_hash = hash_password(payload.new_password)
     db.commit()
     return MessageResponse(message="Your password has been reset. You can now sign in.")
@@ -148,8 +173,5 @@ def request_otp(payload: OTPRequest, request: Request, db: Session = Depends(get
 def verify_otp(payload: OTPVerify, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
     if not user or not user.is_active or not auth_tokens.verify_otp(db, user, payload.code):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired code.",
-        )
+        raise errors.invalid_or_expired_code()
     return Token(access_token=create_access_token(str(user.id)))

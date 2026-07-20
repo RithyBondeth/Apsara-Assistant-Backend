@@ -8,8 +8,8 @@ TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 TELEGRAM_FILE_API = "https://api.telegram.org/file/bot{token}/{path}"
 
 
-async def download_image(access_token: str, file_id: str) -> tuple[bytes, str]:
-    """Fetch a photo the customer sent, by its Telegram file_id.
+async def _download_file(access_token: str, file_id: str, fallback_ext: str) -> tuple[bytes, str]:
+    """Fetch any Telegram file by its file_id.
 
     Two hops: getFile turns the file_id into a storage path, then the file API
     serves the bytes. Note the download URL embeds the bot token — it must
@@ -28,8 +28,23 @@ async def download_image(access_token: str, file_id: str) -> tuple[bytes, str]:
         resp.raise_for_status()
 
     # file_path looks like "photos/file_42.jpg" — keep just the leaf.
-    filename = file_path.rsplit("/", 1)[-1] or f"{file_id}.jpg"
+    filename = file_path.rsplit("/", 1)[-1] or f"{file_id}{fallback_ext}"
     return resp.content, filename
+
+
+async def download_image(access_token: str, file_id: str) -> tuple[bytes, str]:
+    """Fetch a photo the customer sent, by its Telegram file_id."""
+    return await _download_file(access_token, file_id, ".jpg")
+
+
+async def download_voice(access_token: str, file_id: str) -> tuple[bytes, str]:
+    """Fetch a voice note the customer sent, by its Telegram file_id.
+
+    Telegram voice notes are OGG/Opus. The extension matters downstream —
+    Whisper infers the container format from the filename, so a voice note
+    that arrives named ``.jpg`` is rejected as an unsupported format.
+    """
+    return await _download_file(access_token, file_id, ".ogg")
 
 
 def parse_update(update: dict) -> InboundMessage | None:

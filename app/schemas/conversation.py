@@ -39,4 +39,11 @@ class ConversationOut(BaseModel):
 
 
 class ConversationDetailOut(ConversationOut):
+    # The most recent slice of the thread, oldest-first. NOT the whole history:
+    # a long-running channel thread grows without bound, and this endpoint is
+    # hit every time the seller opens a conversation. Older messages come from
+    # GET /conversations/{id}/messages.
     messages: list[MessageOut] = []
+    # Total messages in the thread, so the UI knows whether older ones exist
+    # without having to fetch them.
+    message_total: int = 0

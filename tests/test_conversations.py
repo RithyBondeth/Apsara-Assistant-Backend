@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import UUID
 
+from app.api.v1.endpoints.conversations import MESSAGE_WINDOW
 from app.models.message import Message
 
 
@@ -38,9 +39,9 @@ def test_create_conversation_rejects_unsupported_platform(auth_client):
             json={"customer_id": customer_id, "platform": platform},
         )
         assert r.status_code == 400, f"{platform!r} should be rejected: {r.text}"
-        assert "Unsupported platform" in r.json()["detail"]
+        assert r.json()["detail"]["code"] == "unsupported_platform"
 
-    assert client.get("/api/v1/conversations/").json() == []
+    assert client.get("/api/v1/conversations/").json()["items"] == []
 
 
 def test_conversation_detail_returns_messages_chronologically(auth_client, db_session):
@@ -98,3 +99,82 @@ def test_create_conversation_reuses_open_conversation(auth_client):
     ).json()
 
     assert first["id"] == second["id"]
+
+
+def test_conversation_detail_returns_only_the_newest_window(auth_client, db_session):
+    """The detail endpoint must bound the thread it loads.
+
+    It used to joinedload every message in the conversation, so opening a
+    long-running channel thread pulled the whole history on every click. The
+    window keeps the newest MESSAGE_WINDOW messages — the END of the thread,
+    which is the part the seller is answering — and reports the true total so
+    the UI can offer to page back.
+    """
+    client, _token, _uid = auth_client
+    customer_id = _make_customer(client)
+    conv_id = client.post(
+        "/api/v1/conversations/",
+        json={"customer_id": customer_id, "platform": "website"},
+    ).json()["id"]
+
+    total = MESSAGE_WINDOW + 15
+    base = datetime(2026, 7, 16, 9, 0, 0)
+    for i in range(total):
+        db_session.add(
+            Message(
+                conversation_id=UUID(conv_id),
+                sender_type="customer",
+                message_type="text",
+                content=f"msg-{i:03d}",
+                created_at=base + timedelta(minutes=i),
+            )
+        )
+    db_session.commit()
+
+    detail = client.get(f"/api/v1/conversations/{conv_id}").json()
+
+    assert detail["message_total"] == total
+    assert len(detail["messages"]) == MESSAGE_WINDOW
+    # The NEWEST window, still oldest-first within itself. Sorting descending to
+    # apply the limit and forgetting to flip back would fail both asserts.
+    assert detail["messages"][0]["content"] == f"msg-{total - MESSAGE_WINDOW:03d}"
+    assert detail["messages"][-1]["content"] == f"msg-{total - 1:03d}"
+
+
+def test_older_messages_are_reachable_through_the_messages_route(auth_client, db_session):
+    """The window is only safe because the paginated route can reach past it.
+
+    Mirrors what the chat window's "load older" does: ask for the page directly
+    before the window it already has.
+    """
+    client, _token, _uid = auth_client
+    customer_id = _make_customer(client)
+    conv_id = client.post(
+        "/api/v1/conversations/",
+        json={"customer_id": customer_id, "platform": "website"},
+    ).json()["id"]
+
+    total = MESSAGE_WINDOW + 15
+    base = datetime(2026, 7, 16, 9, 0, 0)
+    for i in range(total):
+        db_session.add(
+            Message(
+                conversation_id=UUID(conv_id),
+                sender_type="customer",
+                message_type="text",
+                content=f"msg-{i:03d}",
+                created_at=base + timedelta(minutes=i),
+            )
+        )
+    db_session.commit()
+
+    older = client.get(
+        f"/api/v1/conversations/{conv_id}/messages",
+        params={"skip": 0, "limit": total - MESSAGE_WINDOW},
+    ).json()
+
+    assert older["total"] == total
+    # Exactly the messages the window left out, and they butt up against it.
+    assert [m["content"] for m in older["items"]] == [
+        f"msg-{i:03d}" for i in range(total - MESSAGE_WINDOW)
+    ]

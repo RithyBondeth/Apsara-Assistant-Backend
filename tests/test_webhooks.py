@@ -50,9 +50,9 @@ def test_telegram_webhook_creates_conversation_and_replies(auth_client, monkeypa
     assert "auto reply" in sent[0][2]
 
     # a conversation with 2 messages (customer + assistant) now exists
-    convs = client.get("/api/v1/conversations/").json()
+    convs = client.get("/api/v1/conversations/").json()["items"]
     assert len(convs) == 1
-    msgs = client.get(f"/api/v1/conversations/{convs[0]['id']}/messages").json()
+    msgs = client.get(f"/api/v1/conversations/{convs[0]['id']}/messages").json()["items"]
     kinds = [m["sender_type"] for m in msgs]
     assert kinds == ["customer", "assistant"]
 
@@ -86,9 +86,9 @@ def test_telegram_webhook_is_idempotent_on_redelivery(auth_client, monkeypatch):
 
     # Only one reply sent, and the conversation has exactly 2 messages (not 4)
     assert len(sent) == 1
-    convs = client.get("/api/v1/conversations/").json()
+    convs = client.get("/api/v1/conversations/").json()["items"]
     assert len(convs) == 1
-    msgs = client.get(f"/api/v1/conversations/{convs[0]['id']}/messages").json()
+    msgs = client.get(f"/api/v1/conversations/{convs[0]['id']}/messages").json()["items"]
     assert len(msgs) == 2
 
 
@@ -153,7 +153,7 @@ def test_messenger_webhook_resolves_real_customer_name(auth_client, monkeypatch)
     assert resp.status_code == 200
 
     # customer was created with the resolved Graph name, not the PSID placeholder
-    customers = client.get("/api/v1/customers/").json()
+    customers = client.get("/api/v1/customers/").json()["items"]
     assert len(customers) == 1
     assert customers[0]["name"] == "Sok Dara"
     assert customers[0]["platform_id"] == "PSID123"
@@ -204,9 +204,9 @@ def test_instagram_webhook_end_to_end(auth_client, monkeypatch):
     assert sent == [("IGSID9", "សួស្តី")]
 
     # customer created with the resolved IG name; conversation platform = instagram
-    customers = client.get("/api/v1/customers/").json()
+    customers = client.get("/api/v1/customers/").json()["items"]
     assert customers[0]["name"] == "Insta Dara"
-    convs = client.get("/api/v1/conversations/").json()
+    convs = client.get("/api/v1/conversations/").json()["items"]
     assert convs[0]["platform"] == "instagram"
 
 

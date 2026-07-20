@@ -41,6 +41,30 @@ engine = create_engine(
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+@pytest.fixture(autouse=True)
+def _reset_auth_limiters():
+    """Clear the sign-in throttles between tests.
+
+    The limiters are module-level singletons keyed by client IP, and every test
+    client presents the same IP — so without this the whole suite shares one
+    budget and tests start 429ing purely because of how many ran before them.
+    Autouse (not opt-in) because `auth_client` registers + logs in, so almost
+    every test in the suite spends from these buckets.
+    """
+    from app.api.v1.endpoints import auth as auth_ep
+
+    limiters = (
+        auth_ep._login_account_limiter,
+        auth_ep._login_ip_limiter,
+        auth_ep._register_limiter,
+    )
+    for limiter in limiters:
+        limiter.clear()
+    yield
+    for limiter in limiters:
+        limiter.clear()
+
+
 @pytest.fixture()
 def db_session():
     """Fresh schema per test for full isolation."""

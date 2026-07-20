@@ -26,6 +26,23 @@ class Settings(BaseSettings):
     # Throttle the unauthenticated "send me a link/code" endpoints, per client IP.
     AUTH_RATE_LIMIT: int = 5
     AUTH_RATE_WINDOW_SECONDS: int = 300
+    # Throttle sign-in. Two independent buckets, both checked before the (very
+    # deliberately expensive) bcrypt verify runs:
+    #   • per account — stops password guessing against one seller.
+    #   • per IP      — stops one host guessing across many accounts, and stops
+    #     unauthenticated bcrypt calls being used to burn server CPU.
+    # The IP bucket is the looser of the two because a whole office or a mobile
+    # carrier can share one address; the account bucket is the security-relevant
+    # one. Note the account bucket lets an attacker who knows an email keep that
+    # seller throttled — a 429 that expires with the window, not a lockout, which
+    # is the accepted trade for blocking guessing.
+    LOGIN_RATE_LIMIT: int = 10            # attempts per window, per account
+    LOGIN_IP_RATE_LIMIT: int = 30         # attempts per window, per client IP
+    LOGIN_RATE_WINDOW_SECONDS: int = 300
+    # Throttle account creation per IP so the register endpoint can't be scripted
+    # into mass signups (each one is also a bcrypt hash).
+    REGISTER_RATE_LIMIT: int = 10
+    REGISTER_RATE_WINDOW_SECONDS: int = 3600
     # Base URL of the web app, used to build the password-reset link in emails.
     FRONTEND_BASE_URL: str = "http://localhost:3000"
 

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core import errors
 from app.core.config import settings
 from app.core.platforms import META_PLATFORMS, SUPPORTED_PLATFORMS, platform_list
 from app.database import get_db
@@ -43,16 +44,10 @@ def create_integration(
     current_user: User = Depends(get_current_user),
 ):
     if payload.platform not in SUPPORTED_PLATFORMS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported platform. Supported: {platform_list()}",
-        )
+        raise errors.unsupported_platform(platform_list())
 
     if payload.platform in META_PLATFORMS and not payload.app_secret:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"app_secret is required for {payload.platform.title()} integrations",
-        )
+        raise errors.app_secret_required(payload.platform.title())
 
     integration = PlatformIntegration(
         user_id=current_user.id,
@@ -67,10 +62,7 @@ def create_integration(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This platform account is already connected",
-        )
+        raise errors.integration_already_connected()
     db.refresh(integration)
     return integration
 
@@ -81,7 +73,7 @@ def _get_owned_integration(db: Session, integration_id: UUID, user: User) -> Pla
         PlatformIntegration.user_id == user.id,
     ).first()
     if not integration:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integration not found")
+        raise errors.integration_not_found()
     return integration
 
 
@@ -130,10 +122,7 @@ async def register_webhook(
     integration = _get_owned_integration(db, integration_id, current_user)
 
     if not settings.PUBLIC_BASE_URL:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="PUBLIC_BASE_URL is not configured on the server",
-        )
+        raise errors.public_base_url_not_configured()
 
     base = settings.PUBLIC_BASE_URL.rstrip("/")
     webhook_url = f"{base}/api/v1/webhooks/{integration.platform}/{integration.id}"
@@ -153,10 +142,7 @@ async def register_webhook(
         # dashboard (pointing at webhook_url below). Here we subscribe the page
         # to the app so its message events start flowing.
         if not integration.external_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="external_id (Facebook Page id) is required to subscribe the page",
-            )
+            raise errors.external_id_required()
         result = await messenger.subscribe_page(integration.access_token, integration.external_id)
         return WebhookRegisterOut(
             webhook_url=webhook_url,
@@ -185,7 +171,4 @@ async def register_webhook(
             detail="Point your website widget's POST requests to this URL.",
         )
 
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Webhook registration not supported for {integration.platform}",
-    )
+    raise errors.webhook_not_supported(integration.platform)

@@ -49,7 +49,7 @@ def test_seller_reply_is_delivered_to_the_customer(auth_client, monkeypatch):
     _inbound(client, integration_id)
     sent.clear()  # drop the AI's auto-reply; we care about the seller's
 
-    conv = client.get("/api/v1/conversations/").json()[0]
+    conv = client.get("/api/v1/conversations/").json()["items"][0]
     r = client.post(
         f"/api/v1/conversations/{conv['id']}/messages",
         json={"content": "We have it in stock!"},
@@ -62,7 +62,7 @@ def test_seller_reply_is_delivered_to_the_customer(auth_client, monkeypatch):
     assert sent[0][1] == "555"
     assert sent[0][2] == "We have it in stock!"
 
-    msgs = client.get(f"/api/v1/conversations/{conv['id']}/messages").json()
+    msgs = client.get(f"/api/v1/conversations/{conv['id']}/messages").json()["items"]
     assert [m["sender_type"] for m in msgs] == ["customer", "assistant", "seller"]
 
 
@@ -81,8 +81,8 @@ def test_seller_reply_is_not_saved_when_delivery_fails(auth_client, monkeypatch)
 
     monkeypatch.setattr(telegram_service, "send_message", boom)
 
-    conv = client.get("/api/v1/conversations/").json()[0]
-    before = len(client.get(f"/api/v1/conversations/{conv['id']}/messages").json())
+    conv = client.get("/api/v1/conversations/").json()["items"][0]
+    before = len(client.get(f"/api/v1/conversations/{conv['id']}/messages").json()["items"])
 
     r = client.post(
         f"/api/v1/conversations/{conv['id']}/messages",
@@ -90,7 +90,7 @@ def test_seller_reply_is_not_saved_when_delivery_fails(auth_client, monkeypatch)
     )
     assert r.status_code == 502, r.text
 
-    after = client.get(f"/api/v1/conversations/{conv['id']}/messages").json()
+    after = client.get(f"/api/v1/conversations/{conv['id']}/messages").json()["items"]
     assert len(after) == before
     assert all(m["content"] != "this will not arrive" for m in after)
 
@@ -104,7 +104,7 @@ def test_seller_cannot_fabricate_customer_or_ai_messages(auth_client, monkeypatc
     sent = []
     _patch_ai_and_send(monkeypatch, sent)
     _inbound(client, integration_id)
-    conv = client.get("/api/v1/conversations/").json()[0]
+    conv = client.get("/api/v1/conversations/").json()["items"][0]
 
     for forged in ("customer", "assistant"):
         r = client.post(
@@ -122,7 +122,7 @@ def test_pausing_ai_records_inbound_but_sends_no_reply(auth_client, monkeypatch)
     _patch_ai_and_send(monkeypatch, sent)
     _inbound(client, integration_id, text="first question")
 
-    conv = client.get("/api/v1/conversations/").json()[0]
+    conv = client.get("/api/v1/conversations/").json()["items"][0]
     assert conv["ai_enabled"] is True
 
     r = client.patch(f"/api/v1/conversations/{conv['id']}", json={"ai_enabled": False})
@@ -137,7 +137,7 @@ def test_pausing_ai_records_inbound_but_sends_no_reply(auth_client, monkeypatch)
     # Nothing was auto-sent...
     assert sent == []
     # ...but the customer's message is still in the seller's inbox to answer.
-    msgs = client.get(f"/api/v1/conversations/{conv['id']}/messages").json()
+    msgs = client.get(f"/api/v1/conversations/{conv['id']}/messages").json()["items"]
     assert [m["sender_type"] for m in msgs] == ["customer", "assistant", "customer"]
     assert msgs[-1]["content"] == "second question"
 
@@ -150,7 +150,7 @@ def test_resuming_ai_starts_replying_again(auth_client, monkeypatch):
     _patch_ai_and_send(monkeypatch, sent)
     _inbound(client, integration_id, text="one")
 
-    conv = client.get("/api/v1/conversations/").json()[0]
+    conv = client.get("/api/v1/conversations/").json()["items"][0]
     client.patch(f"/api/v1/conversations/{conv['id']}", json={"ai_enabled": False})
     _inbound(client, integration_id, text="two")
 
@@ -179,7 +179,7 @@ def test_reply_routes_through_the_bot_the_customer_messaged(auth_client, monkeyp
     assert r.status_code == 200, r.text
     sent.clear()
 
-    conv = client.get("/api/v1/conversations/").json()[0]
+    conv = client.get("/api/v1/conversations/").json()["items"][0]
     client.post(
         f"/api/v1/conversations/{conv['id']}/messages", json={"content": "reply"}
     )
@@ -213,7 +213,10 @@ def test_seller_reply_on_website_conversation_is_rejected(auth_client):
         f"/api/v1/conversations/{conv['id']}/messages", json={"content": "hello?"}
     )
     assert r.status_code == 502, r.text
-    assert "website" in r.json()["detail"].lower()
+    # The reason is the platform's/our own text, carried as a param so the
+    # UI can show what actually went wrong alongside a translated wrapper.
+    assert r.json()["detail"]["code"] == "delivery_failed"
+    assert "website" in r.json()["detail"]["params"]["reason"].lower()
 
 
 def test_seller_reply_needs_a_connected_channel(auth_client, monkeypatch):
@@ -224,7 +227,7 @@ def test_seller_reply_needs_a_connected_channel(auth_client, monkeypatch):
     sent = []
     _patch_ai_and_send(monkeypatch, sent)
     _inbound(client, integration_id)
-    conv = client.get("/api/v1/conversations/").json()[0]
+    conv = client.get("/api/v1/conversations/").json()["items"][0]
 
     # Seller disconnects the bot, then tries to reply from the dashboard.
     assert client.delete(f"/api/v1/integrations/{integration_id}").status_code == 204
@@ -321,12 +324,12 @@ def test_platform_rejection_reason_reaches_the_seller(auth_client, monkeypatch):
 
     monkeypatch.setattr(telegram_service, "send_message", rejecting_send)
 
-    conv = client.get("/api/v1/conversations/").json()[0]
+    conv = client.get("/api/v1/conversations/").json()["items"][0]
     r = client.post(
         f"/api/v1/conversations/{conv['id']}/messages", json={"content": "too late"}
     )
     assert r.status_code == 502
-    assert r.json()["detail"] == meta_message
+    assert r.json()["detail"]["params"]["reason"] == meta_message
 
 
 def test_telegram_rejection_reason_reaches_the_seller(auth_client, monkeypatch):
@@ -349,12 +352,12 @@ def test_telegram_rejection_reason_reaches_the_seller(auth_client, monkeypatch):
 
     monkeypatch.setattr(telegram_service, "send_message", rejecting_send)
 
-    conv = client.get("/api/v1/conversations/").json()[0]
+    conv = client.get("/api/v1/conversations/").json()["items"][0]
     r = client.post(
         f"/api/v1/conversations/{conv['id']}/messages", json={"content": "hello?"}
     )
     assert r.status_code == 502
-    assert r.json()["detail"] == "Forbidden: bot was blocked by the user"
+    assert r.json()["detail"]["params"]["reason"] == "Forbidden: bot was blocked by the user"
 
 
 def test_instagram_seller_reply_uses_instagram_sender(auth_client, monkeypatch):

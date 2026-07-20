@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session, joinedload
 
+from app.core import errors
 from app.core.config import settings
 from app.core.rate_limit import SlidingWindowRateLimiter, client_ip
 from app.database import get_db
@@ -391,8 +392,5 @@ async def website_chat(
         # so tell it to stop expecting one rather than showing an error.
         return WebsiteChatResponse(reply=None, paused=True)
     if result.reply is None:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Assistant is temporarily unavailable",
-        )
+        raise errors.assistant_unavailable()
     return WebsiteChatResponse(reply=result.reply)

@@ -1,9 +1,10 @@
 import uuid
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
+from app.core import errors
 from app.core.security import decode_access_token
 from app.database import get_db
 from app.models.user import User
@@ -17,15 +18,15 @@ def get_current_user(
 ) -> User:
     subject = decode_access_token(token)
     if not subject:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise errors.invalid_token()
 
     try:
         user_id = uuid.UUID(str(subject))
     except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise errors.invalid_token()
 
     user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
     if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        raise errors.user_not_found()
 
     return user

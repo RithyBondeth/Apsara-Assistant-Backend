@@ -128,7 +128,7 @@ def test_order_links_to_a_conversation_and_is_listable_by_it(shop):
         json={"customer_id": customer_id, "items": [{"product_id": product_id, "quantity": 1}]},
     )
 
-    listed = client.get(f"/api/v1/orders/?conversation_id={conv_id}").json()
+    listed = client.get(f"/api/v1/orders/?conversation_id={conv_id}").json()["items"]
     assert len(listed) == 1
     assert listed[0]["conversation_id"] == conv_id
 
@@ -167,4 +167,4 @@ def test_order_rejects_a_conversation_owned_by_someone_else(shop):
         },
     )
     assert r.status_code == 404, r.text
-    assert "conversation" in r.json()["detail"].lower()
+    assert r.json()["detail"]["code"] == "conversation_not_found"
