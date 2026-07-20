@@ -22,7 +22,18 @@ class InboundMessage:
     # link — resolving it needs the seller's access token, so only that
     # channel's service can fetch it (see services/media.py).
     image_ref: str | None = None
+    # A voice note the customer recorded, referenced the same indirect way as
+    # image_ref — a Telegram file_id, resolvable only with the seller's token.
+    voice_ref: str | None = None
+    # Length in seconds as the platform reports it, before we fetch anything.
+    # Lets the caller reject a twenty-minute clip without paying to download
+    # and transcribe it first.
+    voice_duration: int | None = None
 
     @property
     def has_image(self) -> bool:
         return self.image_ref is not None
+
+    @property
+    def has_voice(self) -> bool:
+        return self.voice_ref is not None

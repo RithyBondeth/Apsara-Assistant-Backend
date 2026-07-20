@@ -65,6 +65,32 @@ class Settings(BaseSettings):
     # ── AI ───────────────────────────────────────────────────────────────────
     OPENAI_API_KEY: str = ""
 
+    # ── Voice notes ──────────────────────────────────────────────────────────
+    # Off by default. Khmer speech recognition is materially weaker than
+    # English and a misheard question produces a confident wrong answer, so
+    # each seller opts in once their own audio has been spot-checked.
+    VOICE_ENABLED: bool = False
+    VOICE_TRANSCRIBE_MODEL: str = "whisper-1"
+    # Below this confidence the transcript is shown to the seller but the AI
+    # does NOT answer — the conversation is flagged instead.
+    #
+    # 0.55 is a starting point from general Whisper practice, NOT a value
+    # measured on Khmer audio. Calibrate it with scripts/compare_khmer_asr.py
+    # against real customer voice notes before trusting it in production:
+    # too high and every voice note lands on the seller (the feature is
+    # pointless), too low and the bot invents answers to questions nobody
+    # asked (the feature is harmful).
+    VOICE_MIN_CONFIDENCE: float = 0.55
+    # Clips longer than this are handed straight to the seller untranscribed —
+    # past a minute or two it's a monologue, not a question, and accuracy
+    # degrades along the way.
+    VOICE_MAX_SECONDS: int = 120
+    # When a transcript passes the confidence bar, should the AI answer it
+    # automatically? Leave False to run the whole feature in review mode: the
+    # seller sees every transcript and replies by hand. Flip it on only once
+    # the measured error rate justifies it.
+    VOICE_AUTO_REPLY: bool = False
+
     # ── Public URL (used to build platform webhook callback URLs) ────────────
     # e.g. https://api.apsara.example.com
     PUBLIC_BASE_URL: str = ""

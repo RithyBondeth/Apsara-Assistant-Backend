@@ -1,4 +1,4 @@
-"""Bring an inbound customer image onto storage we control.
+"""Bring inbound customer media onto storage we control.
 
 Re-hosting is required, not a convenience:
 
@@ -34,8 +34,14 @@ _DOWNLOADERS = {
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 
+# Whisper rejects anything over 25MB and a genuine voice note is orders of
+# magnitude smaller; this is a floor against forwarded files, not a quality
+# knob.
+MAX_AUDIO_BYTES = 20 * 1024 * 1024
+
+
 class MediaError(Exception):
-    """An inbound image could not be fetched or stored."""
+    """Inbound media could not be fetched or stored."""
 
 
 async def store_inbound_image(platform: str, access_token: str, image_ref: str) -> str:
@@ -67,5 +73,55 @@ async def store_inbound_image(platform: str, access_token: str, image_ref: str) 
         )
     except Exception as exc:
         raise MediaError("Could not store the image") from exc
+
+    return result["url"]
+
+
+async def fetch_inbound_voice(
+    platform: str, access_token: str, voice_ref: str
+) -> tuple[bytes, str]:
+    """Fetch a customer's voice note and return ``(bytes, filename)``.
+
+    Unlike images, the bytes are returned rather than stored: transcription
+    needs them in memory anyway, and whether the clip is worth keeping depends
+    on whether it transcribed cleanly. Callers hand the bytes to
+    ``store_inbound_voice`` once they've decided.
+    """
+    service = _DOWNLOADERS.get(platform)
+    if service is None or not hasattr(service, "download_voice"):
+        raise MediaError(f"No voice download support for {platform}")
+
+    try:
+        content, filename = await service.download_voice(access_token, voice_ref)
+    except Exception as exc:
+        raise MediaError(f"Could not download the {platform} voice note") from exc
+
+    if len(content) > MAX_AUDIO_BYTES:
+        raise MediaError(
+            f"Voice note is {len(content)} bytes, over the {MAX_AUDIO_BYTES} limit"
+        )
+
+    return content, filename
+
+
+async def store_inbound_voice(content: bytes, filename: str) -> str:
+    """Copy already-fetched voice bytes onto our storage and return the URL.
+
+    Kept even when transcription succeeds: the transcript is a lossy guess at
+    what the customer said, and a seller reviewing a thread needs to be able to
+    press play and hear the original.
+    """
+    if not cloudinary_service.is_configured():
+        raise MediaError("Cloudinary is not configured — cannot store voice notes")
+
+    try:
+        result = await cloudinary_service.upload_image(
+            content,
+            filename,
+            folder="apsara/inbound-voice",
+            resource_type=cloudinary_service.AUDIO_RESOURCE_TYPE,
+        )
+    except Exception as exc:
+        raise MediaError("Could not store the voice note") from exc
 
     return result["url"]

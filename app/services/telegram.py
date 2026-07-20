@@ -48,15 +48,22 @@ async def download_voice(access_token: str, file_id: str) -> tuple[bytes, str]:
 
 
 def parse_update(update: dict) -> InboundMessage | None:
-    """Extract a text and/or photo message from a Telegram update.
+    """Extract a text, photo, and/or voice message from a Telegram update.
 
     Returns None for updates we don't handle (edited messages, callbacks,
-    joins) and for messages carrying neither text nor a photo — voice and
-    documents are still out of scope.
+    joins) and for messages carrying none of text, photo, or voice — documents
+    are still out of scope.
     """
     message = update.get("message")
     if not message:
         return None
+
+    # Telegram distinguishes `voice` (the hold-to-record button, OGG/Opus) from
+    # `audio` (a music file the customer forwarded). Only the former is someone
+    # talking to the seller, so only the former is worth transcribing.
+    voice = message.get("voice") or {}
+    voice_ref = voice.get("file_id")
+    voice_duration = voice.get("duration")
 
     # Telegram sends a photo as an array of the same image at ascending sizes;
     # the last is the largest. Take it: the vision model reads detail, and a
@@ -68,7 +75,7 @@ def parse_update(update: dict) -> InboundMessage | None:
     # so it matters more than the photo for understanding intent.
     text = message.get("text") or message.get("caption") or ""
 
-    if not text and image_ref is None:
+    if not text and image_ref is None and voice_ref is None:
         return None
 
     chat = message.get("chat") or {}
@@ -90,6 +97,8 @@ def parse_update(update: dict) -> InboundMessage | None:
         text=text,
         event_id=event_id,
         image_ref=image_ref,
+        voice_ref=voice_ref,
+        voice_duration=voice_duration,
     )
 
 

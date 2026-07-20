@@ -15,9 +15,10 @@ from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.message import Message
 from app.models.platform_integration import PlatformIntegration
+from app.models.product import Product
 from app.models.webhook_event import WebhookEvent
 from app.schemas.website import WebsiteChatRequest, WebsiteChatResponse
-from app.services import instagram, media, messenger, telegram
+from app.services import instagram, media, messenger, telegram, transcription
 from app.services.chat_service import generate_reply, persist_customer_message
 from app.services.messaging import InboundMessage
 
@@ -142,6 +143,94 @@ class InboundResult:
     paused: bool = False
 
 
+@dataclass
+class VoiceOutcome:
+    """What came back from trying to understand a voice note."""
+
+    # Hosted URL of the original audio, kept regardless of transcription
+    # outcome so the seller can always listen to what was actually said.
+    audio_url: str | None = None
+    transcript: str = ""
+    # False whenever the AI must not answer from this transcript: transcription
+    # failed, the clip was too long, or confidence was below the bar.
+    reliable: bool = False
+
+
+async def _resolve_voice(
+    db: Session, integration: PlatformIntegration, inbound: InboundMessage
+) -> VoiceOutcome:
+    """Fetch, store, and transcribe a customer's voice note.
+
+    Never raises: a voice note we can't understand still needs to reach the
+    seller, so every failure path degrades to ``reliable=False`` with whatever
+    was salvaged. The caller decides what to do about it.
+    """
+    outcome = VoiceOutcome()
+
+    # Reject on the platform's own duration field before spending a download
+    # and a transcription call on a clip we were never going to answer.
+    duration = inbound.voice_duration
+    if duration is not None and duration > settings.VOICE_MAX_SECONDS:
+        logger.info(
+            "Voice note is %ss, over the %ss limit — routing to seller",
+            duration,
+            settings.VOICE_MAX_SECONDS,
+        )
+        return outcome
+
+    try:
+        content, filename = await media.fetch_inbound_voice(
+            integration.platform, integration.access_token, inbound.voice_ref
+        )
+    except media.MediaError:
+        logger.exception(
+            "Could not fetch inbound %s voice note for integration %s",
+            integration.platform,
+            integration.id,
+        )
+        return outcome
+
+    # Store first. If transcription then fails, the seller still has the audio.
+    try:
+        outcome.audio_url = await media.store_inbound_voice(content, filename)
+    except media.MediaError:
+        logger.exception("Could not store inbound voice note for %s", integration.id)
+
+    # Bias decoding toward this seller's actual product names. Generic Khmer
+    # ASR mangles proper nouns worst, and proper nouns are exactly what the
+    # reply hinges on.
+    product_names = [
+        name
+        for (name,) in db.query(Product.name)
+        .filter(Product.user_id == integration.user_id, Product.is_active == True)
+        .all()
+    ]
+
+    try:
+        result = await transcription.transcribe(
+            content,
+            filename,
+            prompt=transcription.product_vocabulary_prompt(product_names),
+        )
+    except transcription.TranscriptionError:
+        logger.exception("Could not transcribe voice note for %s", integration.id)
+        return outcome
+
+    outcome.transcript = result.text
+    outcome.reliable = result.is_reliable()
+
+    if not outcome.reliable:
+        logger.info(
+            "Voice transcript below the bar (confidence=%.2f no_speech=%.2f) "
+            "for integration %s — routing to seller",
+            result.confidence,
+            result.no_speech_prob,
+            integration.id,
+        )
+
+    return outcome
+
+
 async def _reply_to_inbound(
     db: Session, integration: PlatformIntegration, inbound: InboundMessage
 ) -> InboundResult:
@@ -191,21 +280,62 @@ async def _reply_to_inbound(
                 integration.id,
             )
 
+    # Understand any voice note before deciding whether the bot may answer.
+    #
+    # The gate is deliberately conservative. Khmer transcription is the weakest
+    # link in this pipeline, and its characteristic failure is not garbage —
+    # it's a plausible-looking sentence that says something the customer never
+    # said. Answering that produces a fluent, confident, wrong reply, which
+    # costs the seller a sale and their trust in the product. So unless the
+    # transcript clears the confidence bar AND the seller has explicitly opted
+    # into auto-reply, the message is recorded, flagged, and left for a human.
+    text = inbound.text
+    voice: VoiceOutcome | None = None
+    if inbound.has_voice:
+        if not settings.VOICE_ENABLED:
+            logger.info("Voice note received but VOICE_ENABLED is off; recording only")
+            voice = VoiceOutcome()
+        else:
+            voice = await _resolve_voice(db, integration, inbound)
+        # A voice note usually arrives with no caption, so the transcript is
+        # the message. When there is a caption too, the typed text is the more
+        # reliable signal and leads.
+        if voice.transcript:
+            text = f"{text}\n{voice.transcript}".strip() if text else voice.transcript
+
+    voice_needs_seller = voice is not None and not (
+        voice.reliable and settings.VOICE_AUTO_REPLY
+    )
+
     # A human has taken this thread over — record what the customer said, but
-    # don't let the bot answer over the top of them.
-    if not conversation.ai_enabled:
+    # don't let the bot answer over the top of them. Same path when a voice
+    # note couldn't be trusted.
+    if not conversation.ai_enabled or voice_needs_seller:
         try:
-            persist_customer_message(db, conversation, inbound.text, image_url=image_url)
+            persist_customer_message(
+                db, conversation, text, image_url=image_url,
+                audio_url=voice.audio_url if voice else None,
+            )
         except Exception:
             logger.exception(
-                "Failed to record inbound message for paused conversation %s",
+                "Failed to record inbound message for conversation %s",
                 conversation.id,
             )
+        if voice_needs_seller and conversation.ai_enabled:
+            # Raise the seller's hand: there is a customer waiting on a message
+            # the bot declined to answer, and nothing else would surface it.
+            conversation.needs_attention = True
+            db.commit()
         return InboundResult(paused=True)
 
     try:
         _customer_msg, ai_msg = await generate_reply(
-            db, conversation, integration.user, inbound.text, image_url=image_url
+            db,
+            conversation,
+            integration.user,
+            text,
+            image_url=image_url,
+            audio_url=voice.audio_url if voice else None,
         )
     except Exception:
         logger.exception("AI pipeline failed for %s integration %s", platform, integration.id)

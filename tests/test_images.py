@@ -53,8 +53,9 @@ def test_telegram_photo_with_no_caption_is_still_a_message():
     assert inbound.image_ref == "only"
 
 
-def test_telegram_update_with_neither_text_nor_photo_is_ignored():
-    assert parse_update({"message": {"chat": {"id": 1}, "voice": {"file_id": "v"}}}) is None
+def test_telegram_update_with_no_understandable_content_is_ignored():
+    # Voice used to be ignored here; it is now handled — see test_voice.py.
+    assert parse_update({"message": {"chat": {"id": 1}, "sticker": {"id": "s"}}}) is None
     assert parse_update({"edited_message": {"text": "hi"}}) is None
 
 
