@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.database import get_db
@@ -15,26 +15,28 @@ from app.models.user import User
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.message import MessageOut
 from app.services.ai_service import (
+    CATALOGUE_LIMIT,
+    HISTORY_LIMIT,
+    AIError,
     build_openai_messages,
     build_system_prompt,
     generate_ai_reply,
-    normalize_message,
 )
 
 router = APIRouter()
 
 
 @router.post("/{conversation_id}", response_model=ChatResponse)
-async def chat(
+def chat(
     conversation_id: UUID,
     payload: ChatRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Record an incoming customer message and reply to it with the assistant."""
     # ── 1. Load conversation ─────────────────────────────────────────────────
     conversation = (
         db.query(Conversation)
-        .options(joinedload(Conversation.messages))
         .filter(
             Conversation.id == conversation_id,
             Conversation.user_id == current_user.id,
@@ -46,42 +48,56 @@ async def chat(
     if conversation.status == "closed":
         raise HTTPException(status_code=400, detail="Conversation is closed")
 
-    # ── 2. Normalize message & detect language ───────────────────────────────
-    normalized_text, detected_lang = normalize_message(payload.message)
+    content = payload.message.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    # ── 3. Save customer message ─────────────────────────────────────────────
+    # ── 2. Save the customer message ─────────────────────────────────────────
+    # Committed before the model is called: a customer wrote it, so it belongs
+    # in the thread whether or not the reply succeeds. Rolling it back on an AI
+    # outage would silently discard what they said.
     customer_msg = Message(
         conversation_id=conversation_id,
         sender_type="customer",
         message_type=payload.message_type,
-        content=normalized_text,
+        content=content,
     )
     db.add(customer_msg)
-    db.flush()  # get the ID before committing
+    conversation.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(customer_msg)
 
-    # ── 4. Load seller's active products ────────────────────────────────────
+    # ── 3. Load the seller's active catalogue ────────────────────────────────
+    # Bounded in the query, not just when the prompt is built — a seller with a
+    # large catalogue should not pull all of it into memory on every message.
     products = (
         db.query(Product)
         .filter(Product.user_id == current_user.id, Product.is_active == True)
+        .order_by(Product.created_at.desc())
+        .limit(CATALOGUE_LIMIT)
         .all()
     )
 
-    # ── 5. Build system prompt ───────────────────────────────────────────────
-    system_prompt = build_system_prompt(current_user, products, detected_lang)
+    # ── 4. Load recent history, newest-last ──────────────────────────────────
+    # Trimmed in SQL rather than loading every message in the conversation and
+    # slicing in Python, which grows without bound as a thread gets longer.
+    recent = (
+        db.query(Message)
+        .filter(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(HISTORY_LIMIT)
+        .all()
+    )
+    history = list(reversed(recent))
 
-    # ── 6. Build conversation history for OpenAI ────────────────────────────
-    # Use messages already persisted (excludes the message we just flushed)
-    history = [m for m in conversation.messages if m.id != customer_msg.id]
-    openai_messages = build_openai_messages(system_prompt, history, normalized_text)
-
-    # ── 7. Generate AI reply ─────────────────────────────────────────────────
+    # ── 5. Generate the reply ────────────────────────────────────────────────
+    system_prompt = build_system_prompt(current_user, products)
     try:
-        reply_text = await generate_ai_reply(openai_messages)
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=502, detail=f"AI service error: {exc}")
+        reply_text = generate_ai_reply(build_openai_messages(system_prompt, history))
+    except AIError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    # ── 8. Save AI reply ─────────────────────────────────────────────────────
+    # ── 6. Save the AI reply ─────────────────────────────────────────────────
     ai_msg = Message(
         conversation_id=conversation_id,
         sender_type="assistant",
@@ -89,12 +105,8 @@ async def chat(
         content=reply_text,
     )
     db.add(ai_msg)
-
-    # Bump conversation so it surfaces at the top of the list
     conversation.updated_at = datetime.utcnow()
-
     db.commit()
-    db.refresh(customer_msg)
     db.refresh(ai_msg)
 
     return ChatResponse(
