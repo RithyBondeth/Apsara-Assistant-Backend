@@ -24,9 +24,32 @@ VALID_STATUSES = {"pending", "confirmed", "processing", "shipped", "delivered", 
 def _restock_order(db: Session, order: Order) -> None:
     """Return each line item's quantity back to the product's stock."""
     for item in order.items:
-        product = db.query(Product).filter(Product.id == item.product_id).first()
+        product = db.query(Product).filter(Product.id == item.product_id).with_for_update().first()
         if product is not None:
             product.stock += item.quantity
+
+
+def _deduct_order(db: Session, order: Order) -> None:
+    """Take each line item's quantity back out of stock.
+
+    Used when a cancelled order is revived: cancelling returned the goods to
+    inventory, so re-activating has to take them out again or the order ships
+    stock the seller never gave up.
+    """
+    for item in order.items:
+        product = db.query(Product).filter(Product.id == item.product_id).with_for_update().first()
+        if product is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot reopen this order: a product on it no longer exists",
+            )
+        if product.stock < item.quantity:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot reopen this order: insufficient stock for '{product.name}' "
+                       f"(available: {product.stock}, needed: {item.quantity})",
+            )
+        product.stock -= item.quantity
 
 
 @router.get("/", response_model=list[OrderOut])
@@ -89,9 +112,12 @@ def create_order(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Item quantity must be positive"
             )
 
+        # Locked for the transaction: checking stock and then decrementing it is
+        # a read-then-write, and two concurrent orders would otherwise both pass
+        # the check and oversell.
         product = db.query(Product).filter(
             Product.id == item.product_id, Product.user_id == current_user.id
-        ).first()
+        ).with_for_update().first()
         if not product:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -165,9 +191,12 @@ def update_order(
             detail=f"Invalid status. Must be one of: {', '.join(sorted(VALID_STATUSES))}",
         )
 
-    # Return stock to inventory when an order transitions into "cancelled"
-    if new_status == "cancelled" and order.status != "cancelled":
-        _restock_order(db, order)
+    # Stock follows the cancelled/not-cancelled boundary in both directions
+    if new_status is not None and new_status != order.status:
+        if new_status == "cancelled":
+            _restock_order(db, order)
+        elif order.status == "cancelled":
+            _deduct_order(db, order)
 
     for field, value in data.items():
         setattr(order, field, value)
