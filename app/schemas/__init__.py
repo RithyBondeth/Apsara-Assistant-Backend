@@ -4,3 +4,10 @@ from app.schemas.product import ProductCreate, ProductUpdate, ProductOut
 from app.schemas.conversation import ConversationCreate, ConversationUpdate, ConversationOut
 from app.schemas.message import MessageCreate, MessageOut, AttachmentOut
 from app.schemas.order import OrderCreate, OrderUpdate, OrderOut, OrderItemCreate, OrderItemOut
+from app.schemas.auth import (
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+    OtpRequest,
+    OtpVerifyRequest,
+    MessageResponse,
+)
