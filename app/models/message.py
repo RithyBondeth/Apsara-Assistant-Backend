@@ -19,6 +19,11 @@ class Message(Base):
     sender_type = Column(String, nullable=False)
     message_type = Column(String, default="text")
     content = Column(Text)
+    # The platform's own id for this message (Messenger mid, Telegram
+    # update_id). Webhooks are retried on any non-2xx or timeout, so without a
+    # key to recognise a replay the assistant would answer the same customer
+    # twice and bill for it twice.
+    external_id = Column(String, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     conversation = relationship("Conversation", back_populates="messages")

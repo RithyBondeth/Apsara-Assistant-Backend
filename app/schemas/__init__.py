@@ -11,3 +11,4 @@ from app.schemas.auth import (
     OtpVerifyRequest,
     MessageResponse,
 )
+from app.schemas.integration import IntegrationCreate, IntegrationUpdate, IntegrationOut
