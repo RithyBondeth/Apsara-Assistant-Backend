@@ -16,6 +16,10 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     full_name = Column(String, nullable=False)
     business_name = Column(String)
+    # The shop prices in one currency; products inherit it rather than each
+    # carrying their own, which would allow an order to mix currencies and
+    # make its total meaningless.
+    currency = Column(String(3), nullable=False, server_default="USD")
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

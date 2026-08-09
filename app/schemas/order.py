@@ -45,6 +45,7 @@ class OrderOut(BaseModel):
     conversation_id: UUID | None
     status: str
     total_amount: Decimal
+    currency: str
     delivery_address: str | None
     notes: str | None
     created_at: datetime

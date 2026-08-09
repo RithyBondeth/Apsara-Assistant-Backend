@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
 
+from app.core.currency import TCurrency
 from app.schemas.auth import PASSWORD_MIN_LENGTH
 
 
@@ -20,6 +21,7 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     full_name: str | None = None
     business_name: str | None = None
+    currency: TCurrency | None = None
 
 
 class UserOut(BaseModel):
@@ -27,6 +29,7 @@ class UserOut(BaseModel):
     email: str
     full_name: str
     business_name: str | None
+    currency: str
     is_active: bool
     created_at: datetime
 

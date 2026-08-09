@@ -12,7 +12,7 @@ class Product(Base):
     __tablename__ = "products"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String, nullable=False)
     description = Column(Text)
     price = Column(Numeric(12, 2), nullable=False)

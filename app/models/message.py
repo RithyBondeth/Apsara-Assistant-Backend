@@ -15,7 +15,7 @@ class Message(Base):
     __tablename__ = "messages"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
     sender_type = Column(String, nullable=False)
     message_type = Column(String, default="text")
     content = Column(Text)
