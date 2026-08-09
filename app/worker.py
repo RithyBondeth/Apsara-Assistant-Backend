@@ -17,10 +17,13 @@ from app.database import SessionLocal
 from app.services import inbound  # noqa: F401
 from app.services.queue import release_stuck, run_once
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+from app.core.logging import configure as configure_logging
+from app.core.observability import configure as configure_error_tracking
+
+configure_logging(settings.LOG_LEVEL, settings.LOG_FORMAT)
+# Worth more here than in the API: these failures happen with no user watching.
+configure_error_tracking()
+
 logger = logging.getLogger("app.worker")
 
 _running = True

@@ -2,6 +2,20 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    ENVIRONMENT: str = "development"
+
+    LOG_LEVEL: str = "INFO"
+    # "json" for a log shipper, "text" for a terminal.
+    LOG_FORMAT: str = "text"
+
+    # Error tracking. Empty disables it entirely.
+    SENTRY_DSN: str = ""
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+
+    # Comma-separated origins allowed to call this API with credentials.
+    # Empty falls back to "*", which is only tolerable in development.
+    CORS_ORIGINS: str = ""
+
     DATABASE_URL: str
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
@@ -63,6 +77,23 @@ class Settings(BaseSettings):
     CLOUDINARY_CLOUD_NAME: str = ""
     CLOUDINARY_API_KEY: str = ""
     CLOUDINARY_API_SECRET: str = ""
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Origins permitted to call the API.
+
+        Credentialed requests from any origin is not something to ship, so a
+        wildcard is refused outside development rather than quietly allowed.
+        """
+        configured = [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        if configured:
+            return configured
+        if self.ENVIRONMENT != "development":
+            raise RuntimeError(
+                "CORS_ORIGINS must be set outside development: allowing "
+                "credentialed requests from any origin is not safe to deploy."
+            )
+        return ["*"]
 
     class Config:
         env_file = ".env"
