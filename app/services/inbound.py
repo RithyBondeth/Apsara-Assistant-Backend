@@ -24,7 +24,14 @@ from app.services.ai_service import (
     build_system_prompt,
     generate_ai_reply,
 )
-from app.services.platforms import InboundMessage, send_reply
+from app.services.platforms import (
+    MESSENGER,
+    InboundMessage,
+    fetch_messenger_profile,
+    send_reply,
+)
+from app.services.queue import register
+from app.services.quota import spend_reply
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +61,19 @@ def _customer_for(db: Session, connection: PlatformConnection,
             customer.name = message.sender_name
         return customer
 
+    name = message.sender_name
+    if not name and connection.platform == MESSENGER:
+        # Messenger puts no name in the payload, so it takes a second call.
+        # Only on first contact — afterwards the row already has one.
+        name = fetch_messenger_profile(connection.access_token, message.sender_id)
+
     customer = Customer(
         user_id=connection.user_id,
         platform=connection.platform,
         platform_id=message.sender_id,
-        # Messenger gives no name up front, so fall back to something the
-        # seller can recognise until they rename it.
-        name=message.sender_name or f"Customer {message.sender_id[-6:]}",
+        # Still possible to come back empty: the lookup needs a permission the
+        # customer may not have granted.
+        name=name or f"Customer {message.sender_id[-6:]}",
     )
     db.add(customer)
     db.flush()
@@ -118,11 +131,24 @@ def _already_handled(db: Session, connection: PlatformConnection,
     )
 
 
+INBOUND_MESSAGE = "inbound_message"
+
+
+@register(INBOUND_MESSAGE)
+def handle_inbound_job(payload: dict) -> None:
+    """Queue entrypoint. Payload is plain JSON, so the message is rebuilt here."""
+    handle_inbound(payload["connection_id"], InboundMessage(**payload["message"]))
+
+
 def handle_inbound(connection_id, message: InboundMessage) -> None:
     """Record an inbound message and, if enabled, answer it.
 
-    Takes a connection id rather than an instance: the caller's session is
-    already closed by the time this runs in the background.
+    Takes a connection id rather than an instance: the row is re-read here,
+    since this runs long after the request that received it.
+
+    Safe to run twice. The queue releases jobs abandoned by a dead worker, and
+    the platforms redeliver on their own — the external message id is what
+    makes a repeat a no-op rather than a second reply.
     """
     db = SessionLocal()
     try:
@@ -157,6 +183,13 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
         db.commit()
 
         if not connection.auto_reply:
+            return
+
+        # Charged before generating, not after: the cost is incurred by asking,
+        # so a reply that fails to generate still counts against the day.
+        if not spend_reply(db, connection.user_id):
+            logger.warning("Daily reply limit reached; %s message stored unanswered",
+                           connection.platform)
             return
 
         reply = _generate(db, connection, conversation)

@@ -9,6 +9,7 @@ error is retried — often for hours — so reporting "this payload was not for 
 as a failure produces a retry storm rather than a fix.
 """
 
+import dataclasses
 import logging
 from uuid import UUID
 
@@ -19,13 +20,31 @@ from app.core.config import settings
 from app.database import get_db
 from app.models.platform_connection import PlatformConnection
 from app.services import platforms
-from app.services.inbound import handle_inbound
+from app.services.inbound import INBOUND_MESSAGE
+from app.services.queue import drain, enqueue
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 ACK = {"status": "received"}
+
+
+def _queue(db: Session, background: BackgroundTasks, connection_id, message) -> None:
+    """Persist the work, then nudge it along.
+
+    The row is what makes this durable; the background nudge is only so a
+    single-process deployment needs no separate worker. If the process dies
+    before or during the nudge, the job is still on the queue for a worker — or
+    the next restart — to pick up.
+    """
+    enqueue(db, INBOUND_MESSAGE, {
+        "connection_id": str(connection_id),
+        "message": dataclasses.asdict(message),
+    })
+    db.commit()
+    if settings.JOB_RUNNER == "inline":
+        background.add_task(drain, 5)
 
 
 # ── Facebook Messenger ───────────────────────────────────────────────────────
@@ -73,7 +92,7 @@ async def receive_messenger_event(
             continue
 
         for message in messages:
-            background.add_task(handle_inbound, connection.id, message)
+            _queue(db, background, connection.id, message)
 
     return ACK
 
@@ -110,7 +129,7 @@ async def receive_telegram_update(
 
     message = platforms.parse_telegram_update(await request.json())
     if message:
-        background.add_task(handle_inbound, connection.id, message)
+        _queue(db, background, connection.id, message)
 
     return ACK
 

@@ -123,6 +123,38 @@ def parse_telegram_update(update: dict) -> InboundMessage | None:
     )
 
 
+# ── Looking up who is writing ────────────────────────────────────────────────
+
+def fetch_messenger_profile(encrypted_token: str, psid: str) -> str | None:
+    """Ask Graph for a sender's name, or None.
+
+    Messenger identifies a customer only by an opaque page-scoped id, so
+    without this every conversation is headed "Customer 123456". The lookup
+    needs pages_user_locale / pages_messaging on a page the user has messaged,
+    and returns nothing for a customer who has not granted it — so the caller
+    must have a fallback rather than treating this as reliable.
+    """
+    try:
+        response = httpx.get(
+            f"https://graph.facebook.com/{settings.GRAPH_API_VERSION}/{psid}",
+            params={"fields": "first_name,last_name",
+                    "access_token": decrypt(encrypted_token)},
+            timeout=SEND_TIMEOUT,
+        )
+        if response.status_code >= 400:
+            logger.info("No Messenger profile for %s: %s", psid, response.text[:200])
+            return None
+        data = response.json()
+        name = " ".join(
+            part for part in (data.get("first_name"), data.get("last_name")) if part
+        ).strip()
+        return name or None
+    except Exception:
+        # A name is a nicety; failing to get one must not cost the message.
+        logger.exception("Messenger profile lookup failed for %s", psid)
+        return None
+
+
 # ── Sending replies ──────────────────────────────────────────────────────────
 
 def send_reply(platform: str, encrypted_token: str, recipient_id: str, text: str) -> bool:

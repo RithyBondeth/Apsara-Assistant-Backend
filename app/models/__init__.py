@@ -8,6 +8,8 @@ from app.models.order import Order
 from app.models.order_item import OrderItem
 from app.models.verification_code import VerificationCode
 from app.models.platform_connection import PlatformConnection
+from app.models.job import Job
+from app.models.ai_usage import AiUsage
 
 __all__ = [
     "User",
@@ -20,4 +22,6 @@ __all__ = [
     "OrderItem",
     "VerificationCode",
     "PlatformConnection",
+    "Job",
+    "AiUsage",
 ]
