@@ -3,12 +3,16 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
+
+from app.schemas.auth import PASSWORD_MIN_LENGTH
 
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str
+    # The web client already enforces this; without it the API would accept a
+    # one-character password from any other caller.
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH)
     full_name: str
     business_name: str | None = None
 
