@@ -37,6 +37,17 @@ class Settings(BaseSettings):
     META_VERIFY_TOKEN: str = ""
     GRAPH_API_VERSION: str = "v21.0"
 
+    # "inline" processes queued work in the web process, so a single-process
+    # deployment needs no separate worker. "worker" leaves it entirely to
+    # `python -m app.worker`. Either way the job is persisted first.
+    JOB_RUNNER: str = "inline"
+    # How long a claimed job may be held before it is assumed orphaned.
+    JOB_LEASE_SECONDS: int = 300
+    JOB_POLL_SECONDS: float = 2.0
+
+    # Assistant replies one seller may spend per day. 0 disables the ceiling.
+    AI_DAILY_REPLY_LIMIT: int = 500
+
     # Lifetimes for emailed codes.
     PASSWORD_RESET_EXPIRE_MINUTES: int = 30
     OTP_EXPIRE_MINUTES: int = 10

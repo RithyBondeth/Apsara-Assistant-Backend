@@ -14,6 +14,7 @@ from app.models.product import Product
 from app.models.user import User
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.message import MessageOut
+from app.services.quota import spend_reply
 from app.services.ai_service import (
     CATALOGUE_LIMIT,
     HISTORY_LIMIT,
@@ -91,6 +92,15 @@ def chat(
     history = list(reversed(recent))
 
     # ── 5. Generate the reply ────────────────────────────────────────────────
+    # Same ceiling the webhooks are held to, so a seller cannot sidestep it by
+    # driving the assistant from the dashboard instead.
+    if not spend_reply(db, current_user.id):
+        raise HTTPException(
+            status_code=429,
+            detail="You have reached today's limit for assistant replies. "
+                   "Your message was saved.",
+        )
+
     system_prompt = build_system_prompt(current_user, products)
     try:
         reply_text = generate_ai_reply(build_openai_messages(system_prompt, history))

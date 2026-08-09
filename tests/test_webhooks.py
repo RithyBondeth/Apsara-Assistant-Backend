@@ -379,3 +379,86 @@ def test_two_sellers_bots_stay_separate(client, seller, other_seller, db):
     r = wh.post_telegram(client, theirs["id"], wh.telegram_update(3, "crossed"),
                          secret=mine["webhook_secret"])
     assert r.status_code == 403
+
+
+# ── Messenger customer names ─────────────────────────────────────────────────
+
+@pytest.fixture
+def profile(monkeypatch):
+    """Stub the Graph profile lookup, recording the psids it was asked about."""
+    asked = []
+
+    def _fetch(token, psid):
+        asked.append(psid)
+        return _fetch.name
+
+    _fetch.name = "Srey Neang"
+    import app.services.inbound as inbound
+    monkeypatch.setattr(inbound, "fetch_messenger_profile", _fetch)
+    _fetch.asked = asked
+    return _fetch
+
+
+def test_a_messenger_customer_is_named_from_their_profile(client, seller, db, profile):
+    wh.connect(client, seller, external_id="page-1")
+
+    with wh.sends(), ai.replies():
+        wh.post_messenger(client, wh.messenger_payload("page-1", "psid-1", "hi"))
+
+    assert db.query(Customer).one().name == "Srey Neang"
+    assert profile.asked == ["psid-1"]
+
+
+def test_the_profile_is_only_looked_up_on_first_contact(client, seller, db, profile):
+    wh.connect(client, seller, external_id="page-1")
+
+    for i in range(3):
+        with wh.sends(), ai.replies():
+            wh.post_messenger(client, wh.messenger_payload("page-1", "psid-1", f"m{i}",
+                                                           mid=f"mid.{i}"))
+
+    assert profile.asked == ["psid-1"], "one lookup, not one per message"
+
+
+def test_a_missing_profile_falls_back_to_a_placeholder(client, seller, db, profile):
+    """The lookup needs a permission the customer may not have granted."""
+    profile.name = None
+    wh.connect(client, seller, external_id="page-1")
+
+    with wh.sends(), ai.replies():
+        wh.post_messenger(client, wh.messenger_payload("page-1", "psid-123456", "hi"))
+
+    assert db.query(Customer).one().name == "Customer 123456"
+
+
+def test_telegram_needs_no_lookup(client, seller, db, profile):
+    """Its payload carries the name already."""
+    integration = wh.connect(client, seller, platform="telegram", external_id="bot-1")
+
+    with wh.sends(), ai.replies():
+        wh.post_telegram(client, integration["id"], wh.telegram_update(555, "hi"),
+                         secret=integration["webhook_secret"])
+
+    assert profile.asked == []
+    assert db.query(Customer).one().name == "Srey"
+
+
+def test_a_name_the_seller_set_is_not_overwritten(client, seller, db, profile):
+    """Telegram sends a name on every message; a seller's correction must win."""
+    integration = wh.connect(client, seller, platform="telegram", external_id="bot-1")
+    with wh.sends(), ai.replies():
+        wh.post_telegram(client, integration["id"],
+                         wh.telegram_update(555, "hi", update_id=1),
+                         secret=integration["webhook_secret"])
+
+    customer = db.query(Customer).one()
+    client.patch(f"/api/v1/customers/{customer.id}", json={"name": "Neang (VIP)"},
+                 headers=seller.headers)
+
+    with wh.sends(), ai.replies():
+        wh.post_telegram(client, integration["id"],
+                         wh.telegram_update(555, "again", update_id=2),
+                         secret=integration["webhook_secret"])
+
+    db.expire_all()
+    assert db.query(Customer).one().name == "Neang (VIP)"
