@@ -123,6 +123,88 @@ def parse_telegram_update(update: dict) -> InboundMessage | None:
     )
 
 
+# ── Checking a connection actually works ─────────────────────────────────────
+
+@dataclass(frozen=True)
+class CheckResult:
+    ok: bool
+    detail: str
+
+
+def check_credentials(platform: str, encrypted_token: str) -> CheckResult:
+    """Ask the platform whether this token is any good.
+
+    The webhook path cannot tell a bad token from a quiet page — both look like
+    silence. This asks directly, so a seller finds out at the moment they
+    connect rather than the first time a customer is left unanswered.
+    """
+    try:
+        token = decrypt(encrypted_token)
+    except Exception:
+        return CheckResult(False, "Stored credential could not be read. Reconnect "
+                                  "this channel to store it again.")
+
+    try:
+        if platform == TELEGRAM:
+            response = httpx.get(f"https://api.telegram.org/bot{token}/getMe",
+                                 timeout=SEND_TIMEOUT)
+            body = response.json()
+            if response.status_code >= 400 or not body.get("ok"):
+                return CheckResult(False, body.get("description")
+                                   or f"Telegram refused the token ({response.status_code}).")
+            bot = body.get("result", {})
+            handle = bot.get("username") or bot.get("first_name") or "bot"
+            return CheckResult(True, f"Connected to @{handle}.")
+
+        if platform == MESSENGER:
+            response = httpx.get(
+                f"https://graph.facebook.com/{settings.GRAPH_API_VERSION}/me",
+                params={"fields": "id,name", "access_token": token},
+                timeout=SEND_TIMEOUT,
+            )
+            body = response.json()
+            if response.status_code >= 400:
+                message = (body.get("error") or {}).get("message")
+                return CheckResult(False, message
+                                   or f"Facebook refused the token ({response.status_code}).")
+            return CheckResult(True, f"Connected to {body.get('name') or body.get('id')}.")
+
+        return CheckResult(False, f"Unsupported platform {platform!r}.")
+    except httpx.HTTPError as exc:
+        # A network failure says nothing about the token, so do not imply it.
+        logger.warning("Could not reach %s to check credentials: %s", platform, exc)
+        return CheckResult(False, f"Could not reach {platform}. Try again shortly.")
+    except Exception:
+        logger.exception("Credential check failed for %s", platform)
+        return CheckResult(False, "The check failed unexpectedly.")
+
+
+def register_telegram_webhook(encrypted_token: str, url: str, secret: str) -> CheckResult:
+    """Point a bot at our webhook, so the seller never has to call setWebhook.
+
+    Telegram requires HTTPS and refuses a localhost URL, which is why this
+    fails plainly during local development rather than appearing to work.
+    """
+    try:
+        response = httpx.post(
+            f"https://api.telegram.org/bot{decrypt(encrypted_token)}/setWebhook",
+            json={"url": url, "secret_token": secret,
+                  "allowed_updates": ["message"]},
+            timeout=SEND_TIMEOUT,
+        )
+        body = response.json()
+        if response.status_code >= 400 or not body.get("ok"):
+            return CheckResult(False, body.get("description")
+                               or f"Telegram refused the webhook ({response.status_code}).")
+        return CheckResult(True, f"Telegram will now deliver updates to {url}")
+    except httpx.HTTPError as exc:
+        logger.warning("Could not reach Telegram to register a webhook: %s", exc)
+        return CheckResult(False, "Could not reach Telegram. Try again shortly.")
+    except Exception:
+        logger.exception("setWebhook failed")
+        return CheckResult(False, "Registering the webhook failed unexpectedly.")
+
+
 # ── Looking up who is writing ────────────────────────────────────────────────
 
 def fetch_messenger_profile(encrypted_token: str, psid: str) -> str | None:

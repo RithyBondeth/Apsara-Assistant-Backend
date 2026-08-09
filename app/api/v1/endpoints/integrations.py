@@ -11,16 +11,29 @@ from app.core.crypto import encrypt
 from app.database import get_db
 from app.models.platform_connection import PlatformConnection
 from app.models.user import User
-from app.schemas.integration import IntegrationCreate, IntegrationOut, IntegrationUpdate
-from app.services.platforms import TELEGRAM
+from app.schemas.integration import (
+    ConnectionCheck,
+    IntegrationCreate,
+    IntegrationOut,
+    IntegrationUpdate,
+)
+from app.services.platforms import (
+    TELEGRAM,
+    check_credentials,
+    register_telegram_webhook,
+)
 
 router = APIRouter()
 
 
-def _to_out(connection: PlatformConnection) -> IntegrationOut:
+def _webhook_url(connection: PlatformConnection) -> str:
     base = f"{settings.API_BASE_URL.rstrip('/')}/api/v1/webhooks"
-    url = (f"{base}/telegram/{connection.id}" if connection.platform == TELEGRAM
-           else f"{base}/messenger")
+    return (f"{base}/telegram/{connection.id}" if connection.platform == TELEGRAM
+            else f"{base}/messenger")
+
+
+def _to_out(connection: PlatformConnection) -> IntegrationOut:
+    url = _webhook_url(connection)
     return IntegrationOut(
         id=connection.id,
         platform=connection.platform,
@@ -78,6 +91,47 @@ def create_integration(
         )
     db.refresh(connection)
     return _to_out(connection)
+
+
+@router.post("/{integration_id}/check", response_model=ConnectionCheck)
+def check_integration(
+    integration_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Ask the platform whether this connection's token still works.
+
+    Silence on a webhook looks identical whether the page is quiet or the
+    token has been revoked, so this asks directly.
+    """
+    connection = _owned(db, integration_id, current_user)
+    result = check_credentials(connection.platform, connection.access_token)
+    return ConnectionCheck(ok=result.ok, detail=result.detail)
+
+
+@router.post("/{integration_id}/register-webhook", response_model=ConnectionCheck)
+def register_webhook(
+    integration_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Point a Telegram bot at our webhook.
+
+    Messenger has no equivalent: its webhook is configured once per Meta app in
+    the dashboard, not per connected page, so there is nothing to call here.
+    """
+    connection = _owned(db, integration_id, current_user)
+    if connection.platform != TELEGRAM:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Messenger webhooks are configured once in the Meta app "
+                   "dashboard, not per page.",
+        )
+
+    result = register_telegram_webhook(
+        connection.access_token, _webhook_url(connection), connection.webhook_secret
+    )
+    return ConnectionCheck(ok=result.ok, detail=result.detail)
 
 
 @router.patch("/{integration_id}", response_model=IntegrationOut)
