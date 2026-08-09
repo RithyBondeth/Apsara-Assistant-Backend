@@ -103,6 +103,9 @@ def create_order(
         notes=payload.notes,
         status="pending",
         total_amount=0,
+        # Snapshot, not a lookup: if the seller later switches currency, this
+        # order must keep the one it was actually priced and agreed in.
+        currency=current_user.currency,
     )
 
     total = 0

@@ -6,6 +6,7 @@ from functools import lru_cache
 from openai import OpenAI, OpenAIError
 
 from app.core.config import settings
+from app.core.currency import format_amount
 from app.models.message import Message
 from app.models.product import Product
 from app.models.user import User
@@ -46,10 +47,11 @@ def _client() -> OpenAI:
 
 def build_system_prompt(user: User, products: list[Product]) -> str:
     business = user.business_name or user.full_name
+    currency = user.currency
 
     product_lines: list[str] = []
     for p in products[:CATALOGUE_LIMIT]:
-        line = f"• {p.name} — {p.price:,.2f}"
+        line = f"• {p.name} — {format_amount(p.price, currency)}"
         if p.description:
             line += f"\n  {p.description}"
         line += f"\n  {'OUT OF STOCK' if not p.stock else f'Stock: {p.stock} units'}"
@@ -87,8 +89,9 @@ Never switch the customer to a different language than the one they chose.
 BEHAVIOR RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Give prices directly — never make a customer ask twice
-- Quote prices exactly as the numbers appear in the catalog above; do not
-  attach a currency symbol that is not written there
+- Prices are in {currency}. Quote them in {currency} and say so the way a
+  local shop would; never convert to another currency and never quote a bare
+  number that leaves the currency ambiguous
 - If an item is out of stock, apologize and suggest alternatives if available
 - Keep replies short (2–4 sentences max unless more detail is truly needed)
 - Never invent products, prices, stock levels, discounts or delivery dates
