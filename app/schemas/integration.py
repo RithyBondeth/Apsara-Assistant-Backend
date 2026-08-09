@@ -45,3 +45,10 @@ class IntegrationOut(BaseModel):
     webhook_secret: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class ConnectionCheck(BaseModel):
+    """Result of asking the platform whether a connection works."""
+
+    ok: bool
+    detail: str
