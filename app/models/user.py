@@ -31,3 +31,6 @@ class User(Base):
     verification_codes = relationship(
         "VerificationCode", back_populates="user", cascade="all, delete-orphan"
     )
+    platform_connections = relationship(
+        "PlatformConnection", back_populates="user", cascade="all, delete-orphan"
+    )

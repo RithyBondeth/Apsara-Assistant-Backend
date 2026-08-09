@@ -8,6 +8,8 @@ pydantic-settings==2.6.1
 eval-type-backport==0.2.0
 python-dotenv==1.0.1
 python-jose[cryptography]==3.3.0
+# Direct dependency: Fernet encrypts stored page/bot tokens.
+cryptography==50.0.0
 passlib[bcrypt]==1.7.4
 # passlib 1.7.4 reads bcrypt.__about__, which bcrypt 4.1 removed. Left
 # unpinned, pip resolves 5.x and every hash_password/verify_password call

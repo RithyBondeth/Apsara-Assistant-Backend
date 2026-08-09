@@ -21,6 +21,8 @@ os.environ.setdefault(
 os.environ["DATABASE_URL"] = os.environ["TEST_DATABASE_URL"]
 os.environ.setdefault("SECRET_KEY", "test-secret-not-used-outside-tests")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
+os.environ.setdefault("META_APP_SECRET", "test-app-secret")
+os.environ.setdefault("META_VERIFY_TOKEN", "test-verify-token")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

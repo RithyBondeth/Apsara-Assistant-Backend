@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     # Where the web app is reachable — used to build password reset links.
     APP_BASE_URL: str = "http://localhost:3000"
 
+    # Where this API is reachable from the internet — used to tell a seller
+    # which URL to register with Meta or Telegram.
+    API_BASE_URL: str = "http://localhost:8000"
+
     # Any provider with an SMTP endpoint works here (SES, Resend, Postmark,
     # Mailgun). With SMTP_HOST unset, mail is written to the log instead of
     # sent, so local development needs no mail account.
@@ -22,6 +26,16 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "Apsara Assistant <no-reply@apsara.local>"
     SMTP_STARTTLS: bool = True
+
+    # Encrypts stored page/bot tokens. Derived from SECRET_KEY when unset —
+    # set it to decouple credential rotation from token readability.
+    PLATFORM_TOKEN_KEY: str = ""
+
+    # One Meta app serves every connected page: the app secret signs webhook
+    # payloads, and the verify token answers the subscription handshake.
+    META_APP_SECRET: str = ""
+    META_VERIFY_TOKEN: str = ""
+    GRAPH_API_VERSION: str = "v21.0"
 
     # Lifetimes for emailed codes.
     PASSWORD_RESET_EXPIRE_MINUTES: int = 30

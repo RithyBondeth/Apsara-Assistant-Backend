@@ -7,6 +7,7 @@ from app.models.attachment import Attachment
 from app.models.order import Order
 from app.models.order_item import OrderItem
 from app.models.verification_code import VerificationCode
+from app.models.platform_connection import PlatformConnection
 
 __all__ = [
     "User",
@@ -18,4 +19,5 @@ __all__ = [
     "Order",
     "OrderItem",
     "VerificationCode",
+    "PlatformConnection",
 ]
