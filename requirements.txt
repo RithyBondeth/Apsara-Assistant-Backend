@@ -3,11 +3,16 @@ uvicorn[standard]==0.32.1
 sqlalchemy==2.0.36
 alembic==1.14.0
 psycopg2-binary==2.9.12
-pydantic==2.10.3
+pydantic[email]==2.10.3
 pydantic-settings==2.6.1
+eval-type-backport==0.2.0
 python-dotenv==1.0.1
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+# passlib 1.7.4 reads bcrypt.__about__, which bcrypt 4.1 removed. Left
+# unpinned, pip resolves 5.x and every hash_password/verify_password call
+# raises — taking register and login with it.
+bcrypt==4.0.1
 python-multipart==0.0.20
 openai==1.57.4
 boto3==1.35.86
