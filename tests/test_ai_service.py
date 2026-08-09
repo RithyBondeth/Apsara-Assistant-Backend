@@ -1,0 +1,131 @@
+"""Prompt assembly and the OpenAI call, without a database."""
+
+from decimal import Decimal
+from unittest import mock
+
+import pytest
+from openai import APIConnectionError
+
+from app.models.message import Message
+from app.models.product import Product
+from app.models.user import User
+from app.services import ai_service
+from app.services.ai_service import (
+    AIError,
+    build_openai_messages,
+    build_system_prompt,
+    generate_ai_reply,
+)
+
+
+def product(name="Scarf", price="12.50", stock=8, description=None):
+    return Product(name=name, price=Decimal(price), stock=stock,
+                   description=description, is_active=True)
+
+
+def message(sender, content):
+    return Message(sender_type=sender, content=content, message_type="text")
+
+
+SELLER = User(full_name="Sok Dara", business_name="Sok Silk Shop")
+
+
+# ── Catalogue rendering ──────────────────────────────────────────────────────
+
+def test_lists_price_and_stock():
+    prompt = build_system_prompt(SELLER, [product("Silk Scarf", "12.50", 8)])
+    assert "• Silk Scarf — 12.50" in prompt
+    assert "Stock: 8 units" in prompt
+
+
+def test_marks_sold_out_items():
+    assert "OUT OF STOCK" in build_system_prompt(SELLER, [product(stock=0)])
+
+
+def test_no_currency_symbol_is_invented():
+    """Product has no currency column, so the number is quoted as written."""
+    prompt = build_system_prompt(SELLER, [product(price="12.50")])
+    assert "$12.50" not in prompt
+    assert "12.50" in prompt
+
+
+def test_falls_back_to_the_persons_name_without_a_business_name():
+    prompt = build_system_prompt(User(full_name="Sok Dara", business_name=None), [])
+    assert "Sok Dara" in prompt
+
+
+def test_empty_catalogue_is_stated_plainly():
+    assert "No products are listed yet." in build_system_prompt(SELLER, [])
+
+
+def test_catalogue_is_capped():
+    many = [product(name=f"p{i}") for i in range(ai_service.CATALOGUE_LIMIT + 50)]
+    prompt = build_system_prompt(SELLER, many)
+    assert prompt.count("• p") == ai_service.CATALOGUE_LIMIT
+
+
+def test_language_rules_cover_all_three_scripts():
+    prompt = build_system_prompt(SELLER, [])
+    assert "Khmer script (ខ្មែរ) in — Khmer script out" in prompt
+    assert "English in — English out" in prompt
+    assert "romanized Khmer out" in prompt
+
+
+# ── Turn assembly ────────────────────────────────────────────────────────────
+
+def test_maps_senders_to_roles():
+    turns = build_openai_messages("SYS", [
+        message("customer", "tlai ponman?"),
+        message("assistant", "12.50"),
+        message("seller", "still available"),
+    ])
+    assert turns[0] == {"role": "system", "content": "SYS"}
+    assert [t["role"] for t in turns[1:]] == ["user", "assistant", "assistant"]
+
+
+@pytest.mark.parametrize("bad", [message("customer", None),
+                                 message("customer", ""),
+                                 message("mystery", "ignored")])
+def test_drops_turns_the_model_cannot_use(bad):
+    turns = build_openai_messages("SYS", [bad, message("customer", "real")])
+    assert len(turns) == 2
+    assert turns[-1]["content"] == "real"
+
+
+# ── The call itself ──────────────────────────────────────────────────────────
+
+def reply(content):
+    client = mock.MagicMock()
+    client.chat.completions.create.return_value = mock.MagicMock(
+        choices=[mock.MagicMock(message=mock.MagicMock(content=content))])
+    return client
+
+
+def test_returns_the_reply_stripped(monkeypatch):
+    monkeypatch.setattr(ai_service, "_client", lambda: reply("  Sur sdei!  "))
+    assert generate_ai_reply([{"role": "user", "content": "hi"}]) == "Sur sdei!"
+
+
+def test_missing_key_is_reported_before_any_call(monkeypatch):
+    monkeypatch.setattr(ai_service.settings, "OPENAI_API_KEY", "")
+    with pytest.raises(AIError, match="OPENAI_API_KEY"):
+        generate_ai_reply([])
+
+
+@pytest.mark.parametrize("content", ["", "   ", None])
+def test_empty_completions_are_an_error(monkeypatch, content):
+    monkeypatch.setattr(ai_service, "_client", lambda: reply(content))
+    with pytest.raises(AIError, match="empty"):
+        generate_ai_reply([])
+
+
+def test_upstream_failures_are_wrapped_without_their_text(monkeypatch):
+    client = mock.MagicMock()
+    client.chat.completions.create.side_effect = APIConnectionError(request=None)
+    monkeypatch.setattr(ai_service, "_client", lambda: client)
+
+    with pytest.raises(AIError) as excinfo:
+        generate_ai_reply([])
+
+    assert "unavailable" in str(excinfo.value)
+    assert "Connection" not in str(excinfo.value)
