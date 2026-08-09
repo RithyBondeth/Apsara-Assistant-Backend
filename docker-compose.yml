@@ -1,0 +1,54 @@
+# Runs the API, the worker and Postgres together.
+#
+# The worker is a separate process on purpose. Queued work — the OpenAI call
+# behind every inbound customer message — no longer runs inside the request that
+# received it, so something has to run it. With JOB_RUNNER=inline the API does
+# it itself and this service can be dropped; at that point a busy webhook and a
+# slow model compete for the same workers.
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: apsara
+      POSTGRES_PASSWORD: apsara
+      POSTGRES_DB: apsara_db
+    volumes: [apsara-db:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apsara"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      db: {condition: service_healthy}
+    environment: &env
+      DATABASE_URL: postgresql://apsara:apsara@db:5432/apsara_db
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_VERIFY_TOKEN: ${META_VERIFY_TOKEN:-}
+      API_BASE_URL: ${API_BASE_URL:-http://localhost:8000}
+      # Jobs belong to the worker below, not to the request that queued them.
+      JOB_RUNNER: worker
+    ports: ["8000:8000"]
+    # Migrations run before the API serves, so a new column is never missing
+    # from under a request.
+    command: >-
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    build: .
+    depends_on:
+      db: {condition: service_healthy}
+    environment: *env
+    command: ["python", "-m", "app.worker"]
+
+volumes:
+  apsara-db:
