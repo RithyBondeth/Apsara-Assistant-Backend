@@ -1,10 +1,10 @@
 import uuid
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
+from app.core.clock import utcnow
 from app.database import Base
 
 # sender_type: customer, assistant, seller
@@ -24,7 +24,7 @@ class Message(Base):
     # key to recognise a replay the assistant would answer the same customer
     # twice and bill for it twice.
     external_id = Column(String, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     conversation = relationship("Conversation", back_populates="messages")
     attachments = relationship("Attachment", back_populates="message", cascade="all, delete-orphan")

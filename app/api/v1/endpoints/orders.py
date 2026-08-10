@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
+import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.customer import Customer
-from app.models.order import Order
+from app.models.order import PAID, PAYMENT_PENDING, UNPAID, Order
 from app.models.order_item import OrderItem
+from app.models.platform_connection import PlatformConnection
 from app.models.product import Product
 from app.models.user import User
-from app.schemas.order import OrderCreate, OrderOut, OrderUpdate
+from app.schemas.order import CheckoutOut, OrderCreate, OrderOut, OrderUpdate
+from app.services import stripe_gateway
+from app.services.platforms import STRIPE
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -206,6 +214,80 @@ def update_order(
     db.commit()
     db.refresh(order)
     return order
+
+
+@router.post("/{order_id}/checkout", response_model=CheckoutOut)
+def create_checkout(
+    order_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Open a Stripe payment page for this order and return its link.
+
+    Reissuing is allowed and deliberate: Checkout Sessions expire after 24
+    hours, and a customer who takes a day to pay should not need the order
+    rebuilt. The newest session id replaces the old one, so a payment on a
+    stale link still resolves — the webhook matches on the order id in the
+    session's metadata, not on whichever session happens to be current.
+    """
+    order = db.query(Order).options(joinedload(Order.items)).filter(
+        Order.id == order_id, Order.user_id == current_user.id
+    ).first()
+    if not order:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+
+    if order.payment_status == PAID:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="This order has already been paid.")
+    if order.status == "cancelled":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="This order is cancelled. Reopen it before taking payment.")
+    if order.total_amount is None or order.total_amount <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="This order has nothing to charge for.")
+
+    connection = (
+        db.query(PlatformConnection)
+        .filter(PlatformConnection.user_id == current_user.id,
+                PlatformConnection.platform == STRIPE,
+                PlatformConnection.is_active == True)
+        .first()
+    )
+    if not connection:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Connect Stripe under Integrations before taking card payments.",
+        )
+
+    customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
+    base = settings.APP_BASE_URL.rstrip("/")
+    try:
+        session = stripe_gateway.create_checkout_session(
+            connection.access_token,
+            order_id=order.id,
+            amount=order.total_amount,
+            currency=order.currency,
+            description=f"Order from {current_user.business_name or current_user.full_name}",
+            success_url=f"{base}/pay/success?order={order.id}",
+            cancel_url=f"{base}/pay/cancelled?order={order.id}",
+            customer_email=customer.email if customer else None,
+        )
+    except stripe.StripeError as exc:
+        # Surfaced rather than swallowed: "your card page could not be created"
+        # is something the seller can act on, usually by fixing their account.
+        logger.warning("Stripe checkout failed for order %s: %s", order.id, exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=f"Stripe could not create the payment page: {exc.user_message or exc}")
+
+    order.stripe_session_id = session.id
+    # Not "paid" — only the webhook may say that. This records that a payment
+    # page is outstanding, which is what the seller sees while waiting.
+    if order.payment_status == UNPAID:
+        order.payment_status = PAYMENT_PENDING
+    db.commit()
+
+    return CheckoutOut(checkout_url=session.url, session_id=session.id,
+                       payment_status=order.payment_status)
 
 
 @router.delete("/{order_id}", status_code=status.HTTP_204_NO_CONTENT)

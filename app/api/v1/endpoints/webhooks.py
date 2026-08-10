@@ -16,10 +16,12 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
+from app.core.clock import utcnow
 from app.core.config import settings
 from app.database import get_db
+from app.models.order import PAID, Order
 from app.models.platform_connection import PlatformConnection
-from app.services import platforms
+from app.services import platforms, stripe_gateway
 from app.services.inbound import INBOUND_MESSAGE
 from app.services.queue import drain, enqueue
 
@@ -130,6 +132,76 @@ async def receive_telegram_update(
     message = platforms.parse_telegram_update(await request.json())
     if message:
         _queue(db, background, connection.id, message)
+
+    return ACK
+
+
+# ── Stripe ───────────────────────────────────────────────────────────────────
+
+@router.post("/stripe/{connection_id}")
+async def receive_stripe_event(
+    connection_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    stripe_signature: str | None = Header(default=None),
+):
+    """Confirm a payment.
+
+    This is the only thing that may mark an order paid. The customer's browser
+    returning to a success URL proves nothing — it can be visited directly, and
+    it does not happen at all if they close the tab — so the money is only
+    believed when Stripe says so over a signed channel.
+
+    Handled inline rather than queued: it is a signature check and one update,
+    and a seller watching an order flip to paid should not wait on a poll.
+    """
+    connection = (
+        db.query(PlatformConnection)
+        .filter(PlatformConnection.id == connection_id,
+                PlatformConnection.platform == platforms.STRIPE,
+                PlatformConnection.is_active == True)
+        .first()
+    )
+    # Signed over the exact bytes, so read the body before anything parses it.
+    raw = await request.body()
+    if not connection:
+        raise HTTPException(status_code=403, detail="Invalid webhook credentials")
+
+    event = stripe_gateway.verify_webhook(raw, stripe_signature, connection.webhook_secret)
+    if event is None:
+        raise HTTPException(status_code=403, detail="Invalid webhook credentials")
+
+    if event.get("type") != "checkout.session.completed":
+        # Stripe sends whatever the endpoint subscribed to. Anything else is
+        # acknowledged so it is not retried for hours.
+        return ACK
+
+    session = (event.get("data") or {}).get("object") or {}
+    order_id = (session.get("metadata") or {}).get("order_id")
+    if not order_id:
+        logger.warning("Stripe session %s carried no order id", session.get("id"))
+        return ACK
+
+    order = (
+        db.query(Order)
+        .filter(Order.id == order_id, Order.user_id == connection.user_id)
+        .first()
+    )
+    if not order:
+        # Scoped to the connection's owner, so one seller's Stripe account
+        # cannot mark another seller's order paid by quoting its id.
+        logger.warning("Stripe event for unknown order %s", order_id)
+        return ACK
+
+    if order.payment_status != PAID:
+        # Stripe redelivers on any doubt about receipt, so this runs more than
+        # once for a single payment. Writing only on the transition keeps
+        # paid_at the time of the payment rather than the last retry.
+        order.payment_status = PAID
+        order.paid_at = utcnow()
+        db.commit()
+        logger.info("Order %s marked paid from Stripe session %s",
+                    order.id, session.get("id"))
 
     return ACK
 

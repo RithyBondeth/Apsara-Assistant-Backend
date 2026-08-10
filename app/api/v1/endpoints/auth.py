@@ -1,8 +1,9 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.security import create_access_token, hash_password, verify_password
 from app.database import get_db
 from app.models.user import User
@@ -14,7 +15,7 @@ from app.schemas.auth import (
     ResetPasswordRequest,
 )
 from app.schemas.user import Token, UserCreate, UserOut, UserUpdate
-from app.services import verification
+from app.services import throttle, verification
 from app.services.email import send_login_otp, send_password_reset
 
 router = APIRouter()
@@ -43,14 +44,36 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+def login(
+    request: Request,
+    form: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    ip = throttle.client_ip(request)
+
+    # Before the password is touched: a caller who is already over the ceiling
+    # should not get a bcrypt comparison out of the request either.
+    if throttle.too_many_attempts(db, form.username, ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many sign-in attempts. Try again later, or reset your password.",
+            headers={"Retry-After": str(settings.LOGIN_ATTEMPT_WINDOW_MINUTES * 60)},
+        )
+
     user = db.query(User).filter(User.email == form.username).first()
     if not user or not verify_password(form.password, user.password_hash):
+        throttle.record_failure(db, form.username, ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     if not user.is_active:
+        # Counted too. The password was right, so leaving this uncounted would
+        # make a disabled account an unlimited oracle for checking passwords.
+        throttle.record_failure(db, form.username, ip)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
 
+    # A correct password clears the slate, so earlier fumbles cannot accumulate
+    # into a lockout for someone who is signing in perfectly well.
+    throttle.clear_failures(db, form.username)
     return Token(access_token=create_access_token(str(user.id)))
 
 

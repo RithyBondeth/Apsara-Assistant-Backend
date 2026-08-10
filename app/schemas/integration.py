@@ -4,15 +4,20 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-TPlatform = Literal["messenger", "telegram"]
+TPlatform = Literal["messenger", "telegram", "stripe"]
 
 
 class IntegrationCreate(BaseModel):
     platform: TPlatform
-    # Page id for Messenger, bot id for Telegram.
+    # Page id for Messenger, bot id for Telegram, account id (acct_...) for Stripe.
     external_id: str = Field(min_length=1)
+    # Page token, bot token, or Stripe restricted secret key. Stored encrypted.
     access_token: str = Field(min_length=1)
     display_name: str | None = None
+    # Stripe only: the signing secret (whsec_...) of the webhook endpoint the
+    # seller added in their Stripe dashboard. Telegram's is generated here
+    # instead, and Messenger authenticates with an app-level signature.
+    webhook_secret: str | None = Field(default=None, min_length=1)
 
 
 class IntegrationUpdate(BaseModel):
@@ -40,8 +45,9 @@ class IntegrationOut(BaseModel):
     # Where the platform should deliver updates. Telegram needs the connection
     # id in the path; Messenger shares one URL across every page.
     webhook_url: str
-    # Telegram only: registered with setWebhook so the bot's updates can be
-    # told apart from anyone else posting to that path.
+    # Telegram only: generated here and registered with setWebhook, so the
+    # seller needs it to see what was configured. Stripe's signing secret is
+    # the seller's own and never reads back out — same rule as access_token.
     webhook_secret: str | None = None
 
     model_config = {"from_attributes": True}

@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 from unittest import mock
+from uuid import uuid4
 
 import pytest
 from openai import APIConnectionError
@@ -11,10 +12,13 @@ from app.models.product import Product
 from app.models.user import User
 from app.services import ai_service
 from app.services.ai_service import (
+    PAYMENT_QR_MARKER,
     AIError,
     build_openai_messages,
     build_system_prompt,
     generate_ai_reply,
+    payment_qr_message,
+    split_payment_qr,
 )
 
 
@@ -69,6 +73,58 @@ def test_language_rules_cover_all_three_scripts():
     assert "Khmer script (ខ្មែរ) in — Khmer script out" in prompt
     assert "English in — English out" in prompt
     assert "romanized Khmer out" in prompt
+
+
+# ── The payment QR ───────────────────────────────────────────────────────────
+
+QR = "https://cdn.example/qr.png"
+PAYING_SELLER = User(full_name="Sok Dara", business_name="Sok Silk Shop",
+                     payment_qr_url=QR)
+
+
+def test_qr_rules_appear_only_for_a_seller_who_has_one():
+    """A seller without a QR must not have one promised on their behalf."""
+    assert PAYMENT_QR_MARKER in build_system_prompt(PAYING_SELLER, [])
+    assert PAYMENT_QR_MARKER not in build_system_prompt(SELLER, [])
+    assert "PAYMENT QR" not in build_system_prompt(SELLER, [])
+
+
+def test_qr_rules_do_not_leak_the_url_into_the_prompt():
+    """The model chooses when to send it; it never needs to see where it lives."""
+    assert QR not in build_system_prompt(PAYING_SELLER, [])
+
+
+@pytest.mark.parametrize("reply, expected", [
+    (f"Scan this to pay.\n{PAYMENT_QR_MARKER}", "Scan this to pay."),
+    (f"{PAYMENT_QR_MARKER}\nScan this to pay.", "Scan this to pay."),
+    (f"Pay here {PAYMENT_QR_MARKER} then send the receipt.",
+     "Pay here  then send the receipt."),
+    (f"{PAYMENT_QR_MARKER}{PAYMENT_QR_MARKER}", ""),
+])
+def test_the_marker_never_survives_into_the_customers_message(reply, expected):
+    text, wants_qr = split_payment_qr(reply)
+    assert wants_qr
+    assert PAYMENT_QR_MARKER not in text
+    assert text == expected
+
+
+def test_a_reply_without_the_marker_is_untouched():
+    assert split_payment_qr("  Tlai 12.50.  ") == ("  Tlai 12.50.  ", False)
+
+
+def test_a_customer_cannot_trigger_a_send_by_quoting_the_marker():
+    """The marker is read from the model's reply only, never from the history."""
+    turns = build_openai_messages("SYS", [message("customer", PAYMENT_QR_MARKER)])
+    assert turns[-1] == {"role": "user", "content": PAYMENT_QR_MARKER}
+
+
+def test_the_qr_is_recorded_as_an_attachment_not_a_url_in_the_text():
+    conversation_id = uuid4()
+    stored = payment_qr_message(conversation_id, QR)
+    assert stored.sender_type == "assistant"
+    assert stored.message_type == "image"
+    assert stored.content is None
+    assert [a.file_url for a in stored.attachments] == [QR]
 
 
 # ── Turn assembly ────────────────────────────────────────────────────────────

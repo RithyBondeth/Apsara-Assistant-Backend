@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.clock import utcnow
 from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -22,6 +22,8 @@ from app.services.ai_service import (
     build_openai_messages,
     build_system_prompt,
     generate_ai_reply,
+    payment_qr_message,
+    split_payment_qr,
 )
 
 router = APIRouter()
@@ -64,7 +66,7 @@ def chat(
         content=content,
     )
     db.add(customer_msg)
-    conversation.updated_at = datetime.utcnow()
+    conversation.updated_at = utcnow()
     db.commit()
     db.refresh(customer_msg)
 
@@ -103,11 +105,15 @@ def chat(
 
     system_prompt = build_system_prompt(current_user, products)
     try:
-        reply_text = generate_ai_reply(build_openai_messages(system_prompt, history))
+        raw_reply = generate_ai_reply(build_openai_messages(system_prompt, history))
     except AIError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    # ── 6. Save the AI reply ─────────────────────────────────────────────────
+    # ── 6. Save the AI reply, and the QR if it asked for one ─────────────────
+    # There is no platform to hand the image to here, so the QR is recorded as
+    # the message the customer would have received — this endpoint exists to
+    # show the seller what their assistant does.
+    reply_text, wants_qr = split_payment_qr(raw_reply)
     ai_msg = Message(
         conversation_id=conversation_id,
         sender_type="assistant",
@@ -115,11 +121,20 @@ def chat(
         content=reply_text,
     )
     db.add(ai_msg)
-    conversation.updated_at = datetime.utcnow()
+
+    qr_msg = None
+    if wants_qr and current_user.payment_qr_url:
+        qr_msg = payment_qr_message(conversation_id, current_user.payment_qr_url)
+        db.add(qr_msg)
+
+    conversation.updated_at = utcnow()
     db.commit()
     db.refresh(ai_msg)
+    if qr_msg is not None:
+        db.refresh(qr_msg)
 
     return ChatResponse(
         customer_message=MessageOut.model_validate(customer_msg),
         ai_message=MessageOut.model_validate(ai_msg),
+        qr_message=MessageOut.model_validate(qr_msg) if qr_msg else None,
     )

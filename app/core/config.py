@@ -1,4 +1,6 @@
-from pydantic_settings import BaseSettings
+from datetime import timedelta
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -62,6 +64,21 @@ class Settings(BaseSettings):
     # Assistant replies one seller may spend per day. 0 disables the ceiling.
     AI_DAILY_REPLY_LIMIT: int = 500
 
+    # Failed sign-ins one account may accumulate before the endpoint starts
+    # refusing it, and the sliding window they are counted over. 0 disables
+    # throttling — bcrypt alone is not a substitute, so leave it on.
+    LOGIN_MAX_ATTEMPTS: int = 10
+    # The same ceiling for one client address, across every account it tries.
+    # Loose, because an office or a phone network shares one address. 0 counts
+    # by account only.
+    LOGIN_MAX_ATTEMPTS_PER_IP: int = 50
+    LOGIN_ATTEMPT_WINDOW_MINUTES: int = 15
+
+    # Whether X-Forwarded-For can be believed. True only when a proxy the app
+    # controls sets it: when nothing strips an inbound header, a caller can put
+    # any address there and step around the per-address ceiling at will.
+    TRUST_PROXY_HEADERS: bool = False
+
     # Lifetimes for emailed codes.
     PASSWORD_RESET_EXPIRE_MINUTES: int = 30
     OTP_EXPIRE_MINUTES: int = 10
@@ -69,14 +86,9 @@ class Settings(BaseSettings):
     # Minimum gap between code requests for the same account, in seconds.
     CODE_REQUEST_COOLDOWN_SECONDS: int = 60
 
-    AWS_ACCESS_KEY_ID: str = ""
-    AWS_SECRET_ACCESS_KEY: str = ""
-    AWS_S3_BUCKET: str = ""
-    AWS_REGION: str = "ap-southeast-1"
-
-    CLOUDINARY_CLOUD_NAME: str = ""
-    CLOUDINARY_API_KEY: str = ""
-    CLOUDINARY_API_SECRET: str = ""
+    @property
+    def login_attempt_window(self) -> timedelta:
+        return timedelta(minutes=self.LOGIN_ATTEMPT_WINDOW_MINUTES)
 
     @property
     def cors_origins(self) -> list[str]:
@@ -95,8 +107,7 @@ class Settings(BaseSettings):
             )
         return ["*"]
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env")
 
 
 settings = Settings()

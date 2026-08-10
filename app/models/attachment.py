@@ -1,10 +1,10 @@
 import uuid
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
+from app.core.clock import utcnow
 from app.database import Base
 
 
@@ -17,6 +17,6 @@ class Attachment(Base):
     file_type = Column(String)
     file_name = Column(String)
     file_size = Column(Integer)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     message = relationship("Message", back_populates="attachments")

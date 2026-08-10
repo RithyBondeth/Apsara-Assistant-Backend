@@ -13,3 +13,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     customer_message: MessageOut
     ai_message: MessageOut
+    # Present only when the assistant chose to send the shop's payment QR,
+    # which is a separate message on Messenger and Telegram and so is one here
+    # too rather than being folded into the reply.
+    qr_message: MessageOut | None = None

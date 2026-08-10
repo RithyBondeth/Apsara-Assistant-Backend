@@ -11,12 +11,13 @@ picking up the same row.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Callable
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.clock import utcnow
 from app.core.config import settings
 from app.database import SessionLocal
 from app.models.job import FAILED, PENDING, RUNNING, SUCCEEDED, Job
@@ -59,13 +60,13 @@ def _claim(db: Session) -> Job | None:
         ORDER BY run_after
         FOR UPDATE SKIP LOCKED
         LIMIT 1
-    """), {"pending": PENDING, "now": datetime.utcnow()}).first()
+    """), {"pending": PENDING, "now": utcnow()}).first()
     if row is None:
         return None
 
     job = db.query(Job).filter(Job.id == row[0]).first()
     job.status = RUNNING
-    job.locked_at = datetime.utcnow()
+    job.locked_at = utcnow()
     job.attempts += 1
     db.commit()
     return job
@@ -85,7 +86,7 @@ def _finish(db: Session, job: Job, error: str | None, *, permanent: bool = False
         job.status = PENDING
         job.locked_at = None
         job.last_error = error
-        job.run_after = datetime.utcnow() + _backoff(job.attempts)
+        job.run_after = utcnow() + _backoff(job.attempts)
     db.commit()
 
 
@@ -134,7 +135,7 @@ def release_stuck(db: Session) -> int:
     left to mark it either way. Anything held past the lease is assumed
     orphaned; the handler must therefore tolerate being run twice.
     """
-    cutoff = datetime.utcnow() - timedelta(seconds=settings.JOB_LEASE_SECONDS)
+    cutoff = utcnow() - timedelta(seconds=settings.JOB_LEASE_SECONDS)
     released = (
         db.query(Job)
         .filter(Job.status == RUNNING, Job.locked_at < cutoff)

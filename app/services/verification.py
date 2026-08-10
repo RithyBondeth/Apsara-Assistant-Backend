@@ -3,10 +3,11 @@
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy.orm import Session
 
+from app.core.clock import utcnow
 from app.core.config import settings
 from app.models.user import User
 from app.models.verification_code import VerificationCode
@@ -31,7 +32,7 @@ def _recently_issued(db: Session, user: User, purpose: str) -> bool:
     Stops a request loop turning the API into a mail bomb aimed at someone
     else's inbox.
     """
-    cutoff = datetime.utcnow() - timedelta(seconds=settings.CODE_REQUEST_COOLDOWN_SECONDS)
+    cutoff = utcnow() - timedelta(seconds=settings.CODE_REQUEST_COOLDOWN_SECONDS)
     return (
         db.query(VerificationCode)
         .filter(
@@ -46,7 +47,7 @@ def _recently_issued(db: Session, user: User, purpose: str) -> bool:
 
 def invalidate_outstanding(db: Session, user: User, purpose: str) -> None:
     """Consume every live code of this kind for the user."""
-    now = datetime.utcnow()
+    now = utcnow()
     (
         db.query(VerificationCode)
         .filter(
@@ -81,7 +82,7 @@ def issue(db: Session, user: User, purpose: str) -> str | None:
             user_id=user.id,
             purpose=purpose,
             code_hash=hash_code(code),
-            expires_at=datetime.utcnow() + timedelta(minutes=lifetime),
+            expires_at=utcnow() + timedelta(minutes=lifetime),
         )
     )
     db.commit()
@@ -89,7 +90,7 @@ def issue(db: Session, user: User, purpose: str) -> str | None:
 
 
 def _live(query):
-    now = datetime.utcnow()
+    now = utcnow()
     return query.filter(
         VerificationCode.consumed_at.is_(None),
         VerificationCode.expires_at > now,
@@ -107,7 +108,7 @@ def redeem_reset_token(db: Session, token: str) -> User | None:
     if record is None:
         return None
 
-    record.consumed_at = datetime.utcnow()
+    record.consumed_at = utcnow()
     return db.query(User).filter(User.id == record.user_id).first()
 
 
@@ -128,7 +129,7 @@ def redeem_otp(db: Session, user: User, code: str) -> bool:
 
     if record.attempts >= settings.OTP_MAX_ATTEMPTS:
         # Burn it rather than leaving a code that can be hammered further.
-        record.consumed_at = datetime.utcnow()
+        record.consumed_at = utcnow()
         db.commit()
         return False
 
@@ -137,6 +138,6 @@ def redeem_otp(db: Session, user: User, code: str) -> bool:
         db.commit()
         return False
 
-    record.consumed_at = datetime.utcnow()
+    record.consumed_at = utcnow()
     db.commit()
     return True

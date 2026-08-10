@@ -1,9 +1,9 @@
 import uuid
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
+from app.core.clock import utcnow
 from app.database import Base
 
 PENDING = "pending"
@@ -33,11 +33,11 @@ class Job(Base):
 
     # When this becomes eligible to run. Moved forward on each retry so a
     # failing dependency is not hammered.
-    run_after = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    run_after = Column(DateTime, nullable=False, default=utcnow, index=True)
     # Set while a worker holds the job. A process killed mid-job leaves this
     # behind, which is how the reaper recognises work to release.
     locked_at = Column(DateTime)
     last_error = Column(Text)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

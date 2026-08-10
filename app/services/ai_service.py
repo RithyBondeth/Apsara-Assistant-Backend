@@ -7,6 +7,7 @@ from openai import OpenAI, OpenAIError
 
 from app.core.config import settings
 from app.core.currency import format_amount
+from app.models.attachment import Attachment
 from app.models.message import Message
 from app.models.product import Product
 from app.models.user import User
@@ -26,6 +27,12 @@ CATALOGUE_LIMIT = 100
 # assistant's — the thread reads as one shop replying, so the model sees it that
 # way too.
 ROLE_BY_SENDER = {"customer": "user", "assistant": "assistant", "seller": "assistant"}
+
+# How the model asks for the shop's payment QR to be attached. A marker rather
+# than a tool call keeps this to one round trip, which matters on a path that
+# already has a customer waiting; the shape is deliberately unlike anything a
+# customer could type, so a quoted message can never trigger a send.
+PAYMENT_QR_MARKER = "[SEND_PAYMENT_QR]"
 
 
 class AIError(RuntimeError):
@@ -59,6 +66,29 @@ def build_system_prompt(user: User, products: list[Product]) -> str:
 
     product_catalog = "\n\n".join(product_lines) or "No products are listed yet."
 
+    # Only described when there is one to send. A seller who has not set a QR
+    # up should never have the assistant promise a payment code that will not
+    # arrive — so for them the rules simply do not exist.
+    payment_section = f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PAYMENT QR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{business} has a payment QR code you can send. To send it, end your reply with
+{PAYMENT_QR_MARKER} on its own line. The customer receives your message and
+then the QR image.
+- Send it when the customer has decided what to buy and is ready to pay, or
+  when they ask how to pay or ask for the QR / ABA / bank details
+- Say what you are sending in the customer's own language before the marker,
+  e.g. tell them to scan the QR and send the receipt back
+- Do not send it while they are still browsing or only asking prices
+- Send it once per order. If they already have it, remind them to scan the one
+  you sent rather than sending it again
+- Never type the marker in the middle of a sentence, and never describe or
+  mention the marker itself to the customer
+- Payment does not confirm the order — after they pay, tell them the seller
+  will check the transfer and confirm
+""" if user.payment_qr_url else ""
+
     return f"""You are Apsara, an AI-powered sales assistant for "{business}".
 
 Your role:
@@ -84,7 +114,7 @@ message from the message itself:
   not convert it to Khmer script or answer in English.
 - If the customer mixes languages, mirror the mix.
 Never switch the customer to a different language than the one they chose.
-
+{payment_section}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BEHAVIOR RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -100,6 +130,41 @@ BEHAVIOR RULES
   confirm shortly
 - If you cannot answer, politely say you will check with the seller
 """
+
+
+# ── Reading the model's request to attach the QR ──────────────────────────────
+
+def split_payment_qr(reply: str) -> tuple[str, bool]:
+    """Separate the text a customer should read from the request to send the QR.
+
+    Returns the cleaned reply and whether the QR was asked for. Every
+    occurrence is removed, not just a trailing one: the model is told to put
+    the marker on its own line, and on the day it does not, the customer must
+    still never see it.
+
+    A reply that is *only* the marker leaves empty text — the caller decides
+    what to do with that rather than having a sentence invented here.
+    """
+    if PAYMENT_QR_MARKER not in reply:
+        return reply, False
+    return reply.replace(PAYMENT_QR_MARKER, "").strip(), True
+
+
+def payment_qr_message(conversation_id, image_url: str) -> Message:
+    """The thread record for a QR the customer has been sent.
+
+    The link lives on an attachment rather than in `content`, so the seller's
+    inbox can show the image the customer actually received instead of a bare
+    URL, and so a later attachment (a receipt, a product photo) has the same
+    shape.
+    """
+    return Message(
+        conversation_id=conversation_id,
+        sender_type="assistant",
+        message_type="image",
+        attachments=[Attachment(file_url=image_url, file_type="image",
+                                file_name="payment-qr")],
+    )
 
 
 # ── Conversation history builder ──────────────────────────────────────────────

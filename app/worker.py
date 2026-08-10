@@ -15,6 +15,7 @@ from app.database import SessionLocal
 
 # Importing for the side effect of registering the handlers on the queue.
 from app.services import inbound  # noqa: F401
+from app.services import throttle
 from app.services.queue import release_stuck, run_once
 
 from app.core.logging import configure as configure_logging
@@ -46,9 +47,11 @@ def main() -> None:
     while _running:
         db = SessionLocal()
         try:
-            # Periodically return jobs left RUNNING by a process that died.
+            # Periodically return jobs left RUNNING by a process that died, and
+            # drop failed sign-ins too old to throttle anything.
             if time.monotonic() - last_reap > settings.JOB_LEASE_SECONDS:
                 release_stuck(db)
+                throttle.prune(db)
                 last_reap = time.monotonic()
 
             worked = run_once(db)

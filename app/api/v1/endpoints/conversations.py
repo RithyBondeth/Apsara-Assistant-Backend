@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
+from app.core.clock import utcnow
 from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.customer import Customer
@@ -159,7 +159,7 @@ def send_message(
         content=payload.content,
     )
     db.add(message)
-    conversation.updated_at = datetime.utcnow()
+    conversation.updated_at = utcnow()
     db.commit()
     db.refresh(message)
     return message

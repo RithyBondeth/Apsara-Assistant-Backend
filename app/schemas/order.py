@@ -48,8 +48,18 @@ class OrderOut(BaseModel):
     currency: str
     delivery_address: str | None
     notes: str | None
+    payment_status: str
     created_at: datetime
     updated_at: datetime
     items: list[OrderItemOut] = []
 
     model_config = {"from_attributes": True}
+
+
+class CheckoutOut(BaseModel):
+    """A hosted Stripe payment page for one order."""
+
+    # Send this to the customer — in chat, or however the seller prefers.
+    checkout_url: str
+    session_id: str
+    payment_status: str

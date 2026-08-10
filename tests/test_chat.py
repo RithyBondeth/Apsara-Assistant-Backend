@@ -26,8 +26,10 @@ def test_returns_both_messages_in_the_shape_the_client_expects(client, seller):
 
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body) == {"customer_message", "ai_message"}
-    for message in body.values():
+    assert set(body) == {"customer_message", "ai_message", "qr_message"}
+    # No QR was asked for, so the field is present and empty rather than absent.
+    assert body["qr_message"] is None
+    for message in (body["customer_message"], body["ai_message"]):
         assert set(message) >= {"id", "conversation_id", "sender_type", "message_type",
                                 "content", "created_at", "attachments"}
         assert message["conversation_id"] == conversation["id"]
@@ -261,3 +263,37 @@ def test_requires_authentication(client, seller):
     conversation = seller.conversation()
     r = client.post(f"/api/v1/chat/{conversation['id']}", json={"message": "hi"})
     assert r.status_code == 401
+
+
+# ── The shop's payment QR ────────────────────────────────────────────────────
+
+QR = "https://cdn.example/qr.png"
+
+
+def test_the_qr_comes_back_as_a_second_message(client, seller):
+    client.patch("/api/v1/auth/me", json={"payment_qr_url": QR},
+                 headers=seller.headers)
+    conversation = seller.conversation()
+
+    with ai.replies(f"Scan this to pay.\n{ai_service.PAYMENT_QR_MARKER}"):
+        r = client.post(f"/api/v1/chat/{conversation['id']}",
+                        json={"message": "how do I pay?"}, headers=seller.headers)
+
+    body = r.json()
+    assert body["ai_message"]["content"] == "Scan this to pay."
+    assert body["qr_message"]["message_type"] == "image"
+    assert [a["file_url"] for a in body["qr_message"]["attachments"]] == [QR]
+    assert [m["message_type"] for m in messages_in(client, seller, conversation["id"])] \
+        == ["text", "text", "image"]
+
+
+def test_no_qr_message_for_a_seller_who_has_not_set_one(client, seller):
+    conversation = seller.conversation()
+
+    with ai.replies(f"Scan this to pay.\n{ai_service.PAYMENT_QR_MARKER}"):
+        r = client.post(f"/api/v1/chat/{conversation['id']}",
+                        json={"message": "how do I pay?"}, headers=seller.headers)
+
+    body = r.json()
+    assert body["qr_message"] is None
+    assert ai_service.PAYMENT_QR_MARKER not in body["ai_message"]["content"]

@@ -6,11 +6,11 @@ OpenAI spend. This is the ceiling on that.
 """
 
 import logging
-from datetime import date
 
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.core.clock import utctoday
 from app.core.config import settings
 from app.models.ai_usage import AiUsage
 
@@ -29,7 +29,7 @@ def spend_reply(db: Session, user_id) -> bool:
 
     statement = (
         insert(AiUsage)
-        .values(user_id=user_id, day=date.today(), count=1)
+        .values(user_id=user_id, day=utctoday(), count=1)
         .on_conflict_do_update(
             constraint="uq_ai_usage_user_day",
             set_={"count": AiUsage.count + 1},
@@ -49,7 +49,7 @@ def spend_reply(db: Session, user_id) -> bool:
 def used_today(db: Session, user_id) -> int:
     row = (
         db.query(AiUsage.count)
-        .filter(AiUsage.user_id == user_id, AiUsage.day == date.today())
+        .filter(AiUsage.user_id == user_id, AiUsage.day == utctoday())
         .first()
     )
     return row[0] if row else 0

@@ -1,10 +1,10 @@
 import uuid
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
+from app.core.clock import utcnow
 from app.database import Base
 
 
@@ -19,8 +19,8 @@ class Customer(Base):
     # Platform the customer contacted from: messenger, telegram, tiktok, website
     platform = Column(String)
     platform_id = Column(String, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     user = relationship("User", back_populates="customers")
     conversations = relationship("Conversation", back_populates="customer")

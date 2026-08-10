@@ -1,9 +1,9 @@
 import uuid
-from datetime import date, datetime
 
 from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 
+from app.core.clock import utcnow, utctoday
 from app.database import Base
 
 
@@ -21,6 +21,6 @@ class AiUsage(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
                      nullable=False, index=True)
-    day = Column(Date, nullable=False, default=date.today)
+    day = Column(Date, nullable=False, default=utctoday)
     count = Column(Integer, nullable=False, server_default="0")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)

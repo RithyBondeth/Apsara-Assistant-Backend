@@ -79,6 +79,21 @@ def sends(ok: bool = True):
         yield sent
 
 
+@contextmanager
+def sends_images(ok: bool = True):
+    """Stub outbound image delivery, recording what would have been sent."""
+    sent = []
+
+    def _send(platform, token, recipient_id, image_url):
+        sent.append({"platform": platform, "recipient_id": recipient_id,
+                     "image_url": image_url, "token": token})
+        return ok
+
+    import app.services.inbound as inbound
+    with mock.patch.object(inbound, "send_image", _send):
+        yield sent
+
+
 def connect(client, seller, platform="messenger", external_id="page-1",
             token="page-token-abc", **extra):
     r = client.post("/api/v1/integrations/",
