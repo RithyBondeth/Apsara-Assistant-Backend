@@ -149,6 +149,7 @@ that bite:
 | `TRUST_PROXY_HEADERS` | Leave false unless a proxy you control sets `X-Forwarded-For`. If nothing strips an inbound header, a caller can forge it and step around the per-address sign-in limit. |
 | `JOB_RUNNER` | `inline` or `worker`. With `worker`, something must actually run `python -m app.worker`, or queued replies are never sent. |
 | `AI_DAILY_REPLY_LIMIT` | Inbound volume is not ours to control; this is the ceiling on OpenAI spend per seller per day. |
+| `AI_DAILY_DRAFT_LIMIT` | Separate daily ceiling for seller-triggered AI order proposals. |
 
 ## Operational endpoints
 

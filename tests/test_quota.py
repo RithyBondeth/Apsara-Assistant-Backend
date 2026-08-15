@@ -120,3 +120,14 @@ def test_a_failed_generation_still_costs(client, seller, db, limit):
 
     assert r.status_code == 503
     assert quota.used_today(db, user_id) == 1
+
+
+def test_order_drafts_have_a_separate_allowance(db, seller, client, monkeypatch):
+    monkeypatch.setattr(quota.settings, "AI_DAILY_REPLY_LIMIT", 1)
+    monkeypatch.setattr(quota.settings, "AI_DAILY_DRAFT_LIMIT", 1)
+    user_id = client.get("/api/v1/auth/me", headers=seller.headers).json()["id"]
+
+    assert quota.spend_draft(db, user_id) is True
+    assert quota.spend_draft(db, user_id) is False
+    assert quota.used_today(db, user_id) == 0
+    assert quota.spend_reply(db, user_id) is True
