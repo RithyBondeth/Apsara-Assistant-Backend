@@ -41,12 +41,25 @@ so local development needs no mail account.
 
 ### With Docker instead
 
+Start PostgreSQL, apply migrations, and run the API plus its background worker
+with one command:
+
 ```bash
-SECRET_KEY=dev-secret docker compose up
+./dev-up.sh
 ```
 
-That runs Postgres, the API and a separate worker, and applies migrations
-before the API serves.
+The script reads `.env`, checks that Docker and `SECRET_KEY` are available, and
+preserves database data in the `apsara-db` Docker volume. Pass `-d` to run in
+the background:
+
+```bash
+./dev-up.sh -d
+```
+
+Stop a background stack with `docker compose down`. This removes the
+containers but keeps the database volume. To provide configuration from the
+shell instead of `.env`, environment variables still work as normal, for
+example `SECRET_KEY=dev-secret ./dev-up.sh`.
 
 ## Tests
 
