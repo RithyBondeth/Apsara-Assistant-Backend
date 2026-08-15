@@ -62,8 +62,8 @@ def _deduct_order(db: Session, order: Order) -> None:
 
 @router.get("/", response_model=list[OrderOut])
 def list_orders(
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
     status: str | None = Query(default=None),
     customer_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),

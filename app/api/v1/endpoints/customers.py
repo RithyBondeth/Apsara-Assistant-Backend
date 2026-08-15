@@ -16,8 +16,8 @@ router = APIRouter()
 
 @router.get("/", response_model=list[CustomerOut])
 def list_customers(
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
     platform: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),

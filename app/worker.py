@@ -16,7 +16,7 @@ from app.database import SessionLocal
 # Importing for the side effect of registering the handlers on the queue.
 from app.services import inbound  # noqa: F401
 from app.services import throttle
-from app.services.queue import release_stuck, run_once
+from app.services.queue import prune_finished, release_stuck, run_once
 
 from app.core.logging import configure as configure_logging
 from app.core.observability import configure as configure_error_tracking
@@ -52,6 +52,7 @@ def main() -> None:
             if time.monotonic() - last_reap > settings.JOB_LEASE_SECONDS:
                 release_stuck(db)
                 throttle.prune(db)
+                prune_finished(db)
                 last_reap = time.monotonic()
 
             worked = run_once(db)
