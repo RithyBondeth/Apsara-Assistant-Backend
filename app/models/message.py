@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -13,9 +13,26 @@ from app.database import Base
 
 class Message(Base):
     __tablename__ = "messages"
+    __table_args__ = (
+        Index(
+            "uq_messages_connection_external_id",
+            "platform_connection_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text(
+                "platform_connection_id IS NOT NULL AND external_id IS NOT NULL"
+            ),
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    platform_connection_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_connections.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     sender_type = Column(String, nullable=False)
     message_type = Column(String, default="text")
     content = Column(Text)

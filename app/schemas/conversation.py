@@ -21,7 +21,9 @@ class ConversationOut(BaseModel):
     id: UUID
     user_id: UUID
     customer_id: UUID
+    platform_connection_id: UUID | None
     platform: str
+    source: str
     status: str
     created_at: datetime
     updated_at: datetime

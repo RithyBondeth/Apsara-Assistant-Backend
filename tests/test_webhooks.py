@@ -465,6 +465,61 @@ def test_a_name_the_seller_set_is_not_overwritten(client, seller, db, profile):
     assert db.query(Customer).one().name == "Neang (VIP)"
 
 
+def test_seller_can_reply_to_the_exact_connected_channel(client, seller, db, monkeypatch):
+    integration = wh.connect(client, seller, external_id="page-1")
+    client.patch(
+        f"/api/v1/integrations/{integration['id']}",
+        json={"auto_reply": False},
+        headers=seller.headers,
+    )
+    with wh.sends(), ai.replies():
+        wh.post_messenger(client, wh.messenger_payload("page-1", "psid-1", "hello"))
+
+    conversation = conversation_of(client, seller)
+    assert conversation["platform_connection_id"] == integration["id"]
+    assert conversation["source"] == "channel"
+    sent = []
+
+    def deliver(platform, token, recipient_id, text):
+        sent.append((platform, recipient_id, text))
+        return True
+
+    import app.api.v1.endpoints.conversations as conversations_endpoint
+    monkeypatch.setattr(conversations_endpoint, "send_reply", deliver)
+    response = client.post(
+        f"/api/v1/conversations/{conversation['id']}/messages",
+        json={"content": "I can help with that."},
+        headers=seller.headers,
+    )
+
+    assert response.status_code == 201, response.text
+    assert sent == [("messenger", "psid-1", "I can help with that.")]
+    assert response.json()["sender_type"] == "seller"
+
+
+def test_disconnected_channel_never_turns_into_an_ai_rehearsal(client, seller, db):
+    integration = wh.connect(client, seller, external_id="page-1")
+    client.patch(
+        f"/api/v1/integrations/{integration['id']}",
+        json={"auto_reply": False},
+        headers=seller.headers,
+    )
+    with wh.sends(), ai.replies():
+        wh.post_messenger(client, wh.messenger_payload("page-1", "psid-1", "hello"))
+    conversation = conversation_of(client, seller)
+    client.delete(f"/api/v1/integrations/{integration['id']}", headers=seller.headers)
+
+    response = client.post(
+        f"/api/v1/conversations/{conversation['id']}/messages",
+        json={"content": "Are you still there?"},
+        headers=seller.headers,
+    )
+
+    assert response.status_code == 409
+    assert "unavailable" in response.json()["detail"]
+    assert [message.sender_type for message in messages_for(db)] == ["customer"]
+
+
 # ── The shop's payment QR ────────────────────────────────────────────────────
 
 QR = "https://cdn.example/qr.png"

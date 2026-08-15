@@ -11,9 +11,11 @@ from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.message import Message
+from app.models.platform_connection import PlatformConnection
 from app.models.user import User
 from app.schemas.conversation import ConversationCreate, ConversationDetailOut, ConversationOut, ConversationUpdate
 from app.schemas.message import MessageCreate, MessageOut
+from app.services.platforms import send_reply
 
 router = APIRouter()
 
@@ -22,8 +24,8 @@ router = APIRouter()
 
 @router.get("/", response_model=list[ConversationOut])
 def list_conversations(
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
     status: str | None = Query(default=None),
     platform: str | None = Query(default=None),
     customer_id: UUID | None = Query(default=None),
@@ -65,6 +67,7 @@ def create_conversation(
         user_id=current_user.id,
         customer_id=payload.customer_id,
         platform=payload.platform,
+        source="rehearsal",
     )
     db.add(conversation)
     db.commit()
@@ -152,11 +155,59 @@ def send_message(
     if conversation.status == "closed":
         raise HTTPException(status_code=400, detail="Cannot send messages to a closed conversation")
 
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    if payload.message_type != "text":
+        raise HTTPException(status_code=400, detail="Only text replies are supported")
+
+    connection = None
+    if conversation.platform_connection_id:
+        connection = db.query(PlatformConnection).filter(
+            PlatformConnection.id == conversation.platform_connection_id,
+            PlatformConnection.user_id == current_user.id,
+            PlatformConnection.is_active == True,
+        ).first()
+    else:
+        # Backward compatibility for conversations created before the exact
+        # channel was recorded. It is safe only when there is one candidate.
+        candidates = db.query(PlatformConnection).filter(
+            PlatformConnection.user_id == current_user.id,
+            PlatformConnection.platform == conversation.platform,
+            PlatformConnection.is_active == True,
+        ).limit(2).all()
+        if len(candidates) == 1:
+            connection = candidates[0]
+            conversation.platform_connection_id = connection.id
+        elif len(candidates) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail="The channel for this conversation is ambiguous",
+            )
+
+    # A manually created rehearsal has no channel and remains a local note.
+    # A real inbound thread has an exact connection and must be delivered.
+    if connection:
+        customer = db.query(Customer).filter(
+            Customer.id == conversation.customer_id,
+            Customer.user_id == current_user.id,
+        ).first()
+        if not customer or not customer.platform_id:
+            raise HTTPException(status_code=400, detail="This customer is not connected to a channel")
+        if not send_reply(connection.platform, connection.access_token,
+                          customer.platform_id, content):
+            raise HTTPException(status_code=502, detail="The channel did not accept the message")
+    elif conversation.source == "channel":
+        raise HTTPException(
+            status_code=409,
+            detail="The channel for this conversation is unavailable",
+        )
+
     message = Message(
         conversation_id=conversation_id,
-        sender_type=payload.sender_type,
+        sender_type="seller",
         message_type=payload.message_type,
-        content=payload.content,
+        content=content,
     )
     db.add(message)
     conversation.updated_at = utcnow()

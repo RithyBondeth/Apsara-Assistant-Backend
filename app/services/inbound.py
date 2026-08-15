@@ -6,6 +6,7 @@ session and swallows its own failures — there is no request left to fail.
 
 import logging
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.clock import utcnow
@@ -97,6 +98,7 @@ def _conversation_for(db: Session, connection: PlatformConnection,
             Conversation.user_id == connection.user_id,
             Conversation.customer_id == customer.id,
             Conversation.platform == connection.platform,
+            Conversation.platform_connection_id == connection.id,
             Conversation.status == "open",
         )
         .first()
@@ -108,6 +110,8 @@ def _conversation_for(db: Session, connection: PlatformConnection,
         user_id=connection.user_id,
         customer_id=customer.id,
         platform=connection.platform,
+        platform_connection_id=connection.id,
+        source="channel",
     )
     db.add(conversation)
     db.flush()
@@ -123,10 +127,8 @@ def _already_handled(db: Session, connection: PlatformConnection,
     """
     return (
         db.query(Message.id)
-        .join(Conversation, Message.conversation_id == Conversation.id)
         .filter(
-            Conversation.user_id == connection.user_id,
-            Conversation.platform == connection.platform,
+            Message.platform_connection_id == connection.id,
             Message.external_id == message.external_id,
         )
         .first()
@@ -175,6 +177,7 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
 
         db.add(Message(
             conversation_id=conversation.id,
+            platform_connection_id=connection.id,
             sender_type="customer",
             message_type="text",
             content=message.text,
@@ -183,7 +186,15 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
         conversation.updated_at = utcnow()
         # Committed before the model is called: the customer's message belongs
         # in the thread whether or not a reply can be produced.
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # A redelivery can be claimed concurrently by two workers. The
+            # database uniqueness constraint is the final idempotency guard.
+            db.rollback()
+            logger.info("Ignoring concurrently handled %s message %s",
+                        connection.platform, message.external_id)
+            return
 
         if not connection.auto_reply:
             return
