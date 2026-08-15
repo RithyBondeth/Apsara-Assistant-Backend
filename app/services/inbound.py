@@ -104,7 +104,7 @@ def _conversation_for(db: Session, connection: PlatformConnection,
             Conversation.customer_id == customer.id,
             Conversation.platform == connection.platform,
             Conversation.platform_connection_id == connection.id,
-            Conversation.status == "open",
+            Conversation.status.in_(("open", "pending")),
         )
         .first()
     )
@@ -218,7 +218,12 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
         )
         inbound.attachments.extend(stored_attachments)
         db.add(inbound)
-        conversation.updated_at = utcnow()
+        now = utcnow()
+        conversation.updated_at = now
+        conversation.last_customer_message_at = now
+        conversation.unread_count = (conversation.unread_count or 0) + 1
+        if conversation.first_customer_message_at is None:
+            conversation.first_customer_message_at = now
         # Committed before the model is called: the customer's message belongs
         # in the thread whether or not a reply can be produced.
         try:
@@ -232,7 +237,7 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
             return
 
         # A receipt without a caption is evidence, not a prompt for the model.
-        if not connection.auto_reply or not message.text:
+        if conversation.handling_mode == "manual" or not connection.auto_reply or not message.text:
             return
 
         # Charged before generating, not after: the cost is incurred by asking,
@@ -281,7 +286,10 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
                              conversation.id)
 
         if delivered:
-            conversation.updated_at = utcnow()
+            now = utcnow()
+            conversation.updated_at = now
+            if conversation.first_response_at is None:
+                conversation.first_response_at = now
             db.commit()
     except Exception:
         db.rollback()
