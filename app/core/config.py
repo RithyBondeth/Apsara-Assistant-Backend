@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
+    AUTH_COOKIE_NAME: str = "apsara_access_token"
+    AUTH_COOKIE_SECURE: bool = False
 
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
@@ -60,6 +62,8 @@ class Settings(BaseSettings):
     # How long a claimed job may be held before it is assumed orphaned.
     JOB_LEASE_SECONDS: int = 300
     JOB_POLL_SECONDS: float = 2.0
+    # Completed queue rows are useful operational evidence, but not forever.
+    JOB_RETENTION_DAYS: int = 7
 
     # Assistant replies one seller may spend per day. 0 disables the ceiling.
     AI_DAILY_REPLY_LIMIT: int = 500
@@ -89,6 +93,12 @@ class Settings(BaseSettings):
     @property
     def login_attempt_window(self) -> timedelta:
         return timedelta(minutes=self.LOGIN_ATTEMPT_WINDOW_MINUTES)
+
+    @property
+    def auth_cookie_secure(self) -> bool:
+        # HTTPS is mandatory outside local development; do not let a missed
+        # environment variable quietly ship a session cookie over HTTP.
+        return self.AUTH_COOKIE_SECURE or self.ENVIRONMENT != "development"
 
     @property
     def cors_origins(self) -> list[str]:

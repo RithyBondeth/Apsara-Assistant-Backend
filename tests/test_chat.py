@@ -261,6 +261,7 @@ def test_unknown_conversation_is_404(client, seller):
 
 def test_requires_authentication(client, seller):
     conversation = seller.conversation()
+    client.cookies.clear()
     r = client.post(f"/api/v1/chat/{conversation['id']}", json={"message": "hi"})
     assert r.status_code == 401
 

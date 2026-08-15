@@ -46,6 +46,7 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
 @router.post("/login", response_model=Token)
 def login(
     request: Request,
+    response: Response,
     form: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
@@ -74,7 +75,9 @@ def login(
     # A correct password clears the slate, so earlier fumbles cannot accumulate
     # into a lockout for someone who is signing in perfectly well.
     throttle.clear_failures(db, form.username)
-    return Token(access_token=create_access_token(str(user.id)))
+    token = create_access_token(str(user.id))
+    _set_auth_cookie(response, token)
+    return Token(access_token=token)
 
 
 @router.get("/me", response_model=UserOut)
@@ -96,15 +99,16 @@ def update_me(
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout():
+def logout(response: Response):
     """Acknowledge a sign-out.
 
     Access tokens are stateless and self-expiring, so there is no server-side
-    session to end — the client discards the token. This exists so that a
-    client can call it unconditionally, and as the place a token denylist
-    would go if one is ever added.
+    session to revoke. Clearing the HttpOnly browser cookie ends the browser
+    session; bearer API clients discard their own token.
     """
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    response.delete_cookie(settings.AUTH_COOKIE_NAME, path="/")
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 # ── Password reset ───────────────────────────────────────────────────────────
@@ -163,7 +167,7 @@ def request_otp(
 
 
 @router.post("/otp/verify", response_model=Token)
-def verify_otp(payload: OtpVerifyRequest, db: Session = Depends(get_db)):
+def verify_otp(payload: OtpVerifyRequest, response: Response, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email, User.is_active == True).first()
     # One message for a wrong code, an unknown address and a disabled account,
     # so a failed attempt says nothing about which of the three it was.
@@ -174,4 +178,19 @@ def verify_otp(payload: OtpVerifyRequest, db: Session = Depends(get_db)):
     if not user or not verification.redeem_otp(db, user, payload.code):
         raise invalid
 
-    return Token(access_token=create_access_token(str(user.id)))
+    token = create_access_token(str(user.id))
+    _set_auth_cookie(response, token)
+    return Token(access_token=token)
+
+
+def _set_auth_cookie(response: Response, token: str) -> None:
+    """Keep browser credentials outside JavaScript while retaining bearer API clients."""
+    response.set_cookie(
+        settings.AUTH_COOKIE_NAME,
+        token,
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite="lax",
+        path="/",
+    )
