@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 class OrderItemCreate(BaseModel):
     product_id: UUID
+    variant_id: UUID | None = None
     quantity: int
     # unit_price is intentionally omitted — the server uses the product's
     # current price as the source of truth (see endpoints/orders.py).
@@ -17,6 +18,10 @@ class OrderItemCreate(BaseModel):
 class OrderItemOut(BaseModel):
     id: UUID
     product_id: UUID
+    variant_id: UUID
+    variant_name: str
+    variant_sku: str | None
+    variant_options: dict[str, str]
     quantity: int
     unit_price: Decimal
     subtotal: Decimal

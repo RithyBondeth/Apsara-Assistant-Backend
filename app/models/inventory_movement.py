@@ -24,7 +24,14 @@ class InventoryMovement(Base):
     product_id = Column(
         UUID(as_uuid=True), ForeignKey("products.id", ondelete="SET NULL"), nullable=True
     )
+    variant_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("product_variants.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     product_name = Column(String, nullable=False)
+    variant_name = Column(String(500))
+    variant_sku = Column(String(100))
     order_id = Column(
         UUID(as_uuid=True), ForeignKey("orders.id", ondelete="SET NULL"), nullable=True
     )
@@ -39,4 +46,5 @@ class InventoryMovement(Base):
     created_at = Column(DateTime, nullable=False, default=utcnow)
 
     product = relationship("Product", back_populates="inventory_movements")
+    variant = relationship("ProductVariant")
     order = relationship("Order", back_populates="inventory_movements")

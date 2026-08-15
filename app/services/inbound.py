@@ -7,7 +7,7 @@ session and swallows its own failures — there is no request left to fail.
 import logging
 
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.clock import utcnow
 from app.core.config import settings
@@ -302,7 +302,7 @@ def _generate(db: Session, connection: PlatformConnection,
         return None
 
     products = (
-        db.query(Product)
+        db.query(Product).options(selectinload(Product.variants))
         .filter(Product.user_id == seller.id, Product.is_active == True)
         .order_by(Product.created_at.desc())
         .limit(CATALOGUE_LIMIT)

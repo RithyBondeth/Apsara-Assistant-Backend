@@ -25,6 +25,9 @@ class ChatResponse(BaseModel):
 class OrderDraftItemOut(BaseModel):
     product_id: UUID
     product_name: str
+    variant_id: UUID
+    variant_name: str
+    variant_options: dict[str, str]
     quantity: int
     unit_price: Decimal
     subtotal: Decimal

@@ -28,6 +28,12 @@ class ProductImage(Base):
     product_id = Column(
         UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    variant_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("product_variants.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     blob = deferred(Column(LargeBinary, nullable=False))
     content_type = Column(String(32), nullable=False)
     file_name = Column(String(255), nullable=False)
@@ -37,6 +43,7 @@ class ProductImage(Base):
     created_at = Column(DateTime, nullable=False, default=utcnow)
 
     product = relationship("Product", back_populates="images")
+    variant = relationship("ProductVariant", back_populates="images")
 
     @property
     def url(self) -> str:

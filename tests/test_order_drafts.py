@@ -45,6 +45,8 @@ def test_draft_maps_catalogue_products_without_creating_an_order(
     assert draft["notes"] == "Blue if available"
     assert draft["items"] == [{
         "product_id": product["id"], "product_name": "Silk Scarf",
+        "variant_id": product["variants"][0]["id"], "variant_name": "Default",
+        "variant_options": {},
         "quantity": 2, "unit_price": "12.50", "subtotal": "25.00", "stock": 8,
     }]
     assert db.query(Order).count() == 0
