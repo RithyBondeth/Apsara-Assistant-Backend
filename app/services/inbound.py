@@ -10,9 +10,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.clock import utcnow
+from app.core.config import settings
 from app.database import SessionLocal
 from app.models.conversation import Conversation
 from app.models.customer import Customer
+from app.models.attachment import Attachment
 from app.models.message import Message
 from app.models.platform_connection import PlatformConnection
 from app.models.product import Product
@@ -30,6 +32,8 @@ from app.services.ai_service import (
 from app.services.platforms import (
     MESSENGER,
     InboundMessage,
+    InboundAttachment,
+    download_attachment,
     fetch_messenger_profile,
     send_image,
     send_reply,
@@ -142,7 +146,12 @@ INBOUND_MESSAGE = "inbound_message"
 @register(INBOUND_MESSAGE)
 def handle_inbound_job(payload: dict) -> None:
     """Queue entrypoint. Payload is plain JSON, so the message is rebuilt here."""
-    handle_inbound(payload["connection_id"], InboundMessage(**payload["message"]))
+    message_payload = dict(payload["message"])
+    message_payload["attachments"] = tuple(
+        InboundAttachment(**attachment)
+        for attachment in message_payload.get("attachments", [])
+    )
+    handle_inbound(payload["connection_id"], InboundMessage(**message_payload))
 
 
 def handle_inbound(connection_id, message: InboundMessage) -> None:
@@ -175,14 +184,39 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
         customer = _customer_for(db, connection, message)
         conversation = _conversation_for(db, connection, customer)
 
-        db.add(Message(
+        stored_attachments: list[Attachment] = []
+        stored_bytes = 0
+        for locator in message.attachments:
+            try:
+                downloaded = download_attachment(
+                    connection.platform, connection.access_token, locator
+                )
+                if stored_bytes + len(downloaded.content) > settings.MAX_ATTACHMENT_BYTES:
+                    raise ValueError("Attachments exceed the per-message size limit")
+                stored_attachments.append(Attachment(
+                    blob=downloaded.content,
+                    file_type=downloaded.content_type,
+                    file_name=downloaded.file_name,
+                    file_size=len(downloaded.content),
+                    review_status="pending",
+                ))
+                stored_bytes += len(downloaded.content)
+            except Exception as exc:
+                logger.warning("Could not retain attachment from %s message %s: %s",
+                               connection.platform, message.external_id, exc)
+
+        inbound = Message(
             conversation_id=conversation.id,
             platform_connection_id=connection.id,
             sender_type="customer",
-            message_type="text",
-            content=message.text,
+            message_type="image" if stored_attachments else "text",
+            content=message.text or ("Attachment could not be downloaded."
+                                     if message.attachments and not stored_attachments
+                                     else None),
             external_id=message.external_id,
-        ))
+        )
+        inbound.attachments.extend(stored_attachments)
+        db.add(inbound)
         conversation.updated_at = utcnow()
         # Committed before the model is called: the customer's message belongs
         # in the thread whether or not a reply can be produced.
@@ -196,7 +230,8 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
                         connection.platform, message.external_id)
             return
 
-        if not connection.auto_reply:
+        # A receipt without a caption is evidence, not a prompt for the model.
+        if not connection.auto_reply or not message.text:
             return
 
         # Charged before generating, not after: the cost is incurred by asking,

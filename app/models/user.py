@@ -32,7 +32,7 @@ class User(Base):
     customers = relationship("Customer", back_populates="user")
     products = relationship("Product", back_populates="user")
     conversations = relationship("Conversation", back_populates="user")
-    orders = relationship("Order", back_populates="user")
+    orders = relationship("Order", back_populates="user", foreign_keys="Order.user_id")
     verification_codes = relationship(
         "VerificationCode", back_populates="user", cascade="all, delete-orphan"
     )

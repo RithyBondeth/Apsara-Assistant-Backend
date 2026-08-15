@@ -8,15 +8,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
+from app.core.clock import utcnow
 from app.core.config import settings
 from app.database import get_db
 from app.models.conversation import Conversation
+from app.models.attachment import Attachment
 from app.models.customer import Customer
 from app.models.order import PAID, PAYMENT_PENDING, UNPAID, Order
 from app.models.order_item import OrderItem
+from app.models.message import Message
 from app.models.platform_connection import PlatformConnection
 from app.models.product import Product
 from app.models.user import User
+from app.schemas.message import AttachmentOut
 from app.schemas.order import CheckoutOut, OrderCreate, OrderOut, OrderUpdate
 from app.services import stripe_gateway
 from app.services.platforms import STRIPE
@@ -27,6 +31,35 @@ router = APIRouter()
 
 # Allowed order statuses (see app/models/order.py)
 VALID_STATUSES = {"pending", "confirmed", "processing", "shipped", "delivered", "cancelled"}
+
+
+def _owned_order(db: Session, order_id: UUID, user_id: UUID, *, lock: bool = False) -> Order:
+    query = db.query(Order).filter(Order.id == order_id, Order.user_id == user_id)
+    if not lock:
+        query = query.options(joinedload(Order.items))
+    order = query.with_for_update().first() if lock else query.first()
+    if not order:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+    return order
+
+
+def _receipt_for_order(db: Session, order: Order, attachment_id: UUID,
+                       *, lock: bool = False) -> Attachment:
+    query = (
+        db.query(Attachment)
+        .join(Message, Message.id == Attachment.message_id)
+        .filter(
+            Attachment.id == attachment_id,
+            Message.conversation_id == order.conversation_id,
+            Message.sender_type == "customer",
+            Attachment.blob.isnot(None),
+        )
+    )
+    receipt = query.with_for_update().first() if lock else query.first()
+    if not receipt:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Receipt not found for this order conversation")
+    return receipt
 
 
 def _restock_order(db: Session, order: Order) -> None:
@@ -288,6 +321,88 @@ def create_checkout(
 
     return CheckoutOut(checkout_url=session.url, session_id=session.id,
                        payment_status=order.payment_status)
+
+
+@router.get("/{order_id}/receipts", response_model=list[AttachmentOut])
+def list_order_receipts(
+    order_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    order = _owned_order(db, order_id, current_user.id)
+    if order.conversation_id is None:
+        return []
+    return (
+        db.query(Attachment)
+        .join(Message, Message.id == Attachment.message_id)
+        .filter(
+            Message.conversation_id == order.conversation_id,
+            Message.sender_type == "customer",
+            Attachment.blob.isnot(None),
+        )
+        .order_by(Attachment.created_at.desc())
+        .all()
+    )
+
+
+@router.post("/{order_id}/receipts/{attachment_id}/confirm", response_model=OrderOut)
+def confirm_order_receipt(
+    order_id: UUID,
+    attachment_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    order = _owned_order(db, order_id, current_user.id, lock=True)
+    if order.status == "cancelled":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Reopen this order before confirming payment")
+    receipt = _receipt_for_order(db, order, attachment_id, lock=True)
+
+    if order.payment_status == PAID:
+        if order.payment_receipt_attachment_id == receipt.id:
+            return order
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="This order already has a confirmed payment")
+    used = db.query(Order.id).filter(
+        Order.payment_receipt_attachment_id == receipt.id,
+        Order.id != order.id,
+    ).first()
+    if used:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="This receipt is already attached to another order")
+
+    now = utcnow()
+    receipt.review_status = "accepted"
+    receipt.reviewed_at = now
+    receipt.reviewed_by_user_id = current_user.id
+    order.payment_status = PAID
+    order.payment_method = "qr"
+    order.payment_receipt_attachment_id = receipt.id
+    order.payment_confirmed_by_user_id = current_user.id
+    order.paid_at = now
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+@router.post("/{order_id}/receipts/{attachment_id}/reject", response_model=AttachmentOut)
+def reject_order_receipt(
+    order_id: UUID,
+    attachment_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    order = _owned_order(db, order_id, current_user.id, lock=True)
+    receipt = _receipt_for_order(db, order, attachment_id, lock=True)
+    if order.payment_receipt_attachment_id == receipt.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="A confirmed payment receipt cannot be rejected")
+    receipt.review_status = "rejected"
+    receipt.reviewed_at = utcnow()
+    receipt.reviewed_by_user_id = current_user.id
+    db.commit()
+    db.refresh(receipt)
+    return receipt
 
 
 @router.delete("/{order_id}", status_code=status.HTTP_204_NO_CONTENT)

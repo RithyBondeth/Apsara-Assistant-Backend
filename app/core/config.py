@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # Assistant replies one seller may spend per day. 0 disables the ceiling.
     AI_DAILY_REPLY_LIMIT: int = 500
 
+    # Customer-supplied images are persisted so expiring platform URLs do not
+    # destroy payment evidence. Bound each download before it reaches storage.
+    MAX_ATTACHMENT_BYTES: int = 10_000_000
+
     # Failed sign-ins one account may accumulate before the endpoint starts
     # refusing it, and the sliding window they are counted over. 0 disables
     # throttling — bcrypt alone is not a substitute, so leave it on.

@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from unittest import mock
 
 import pytest
 
@@ -9,6 +10,7 @@ from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.message import Message
 from app.services import ai_service
+from app.services.platforms import AttachmentDownload, parse_telegram_update
 from tests import ai, webhooks as wh
 
 
@@ -108,6 +110,50 @@ def test_a_customer_message_is_recorded_and_answered(client, seller, db):
                      "text": "Tlai 12.50 USD.", "token": mock_token(db)}]
     # The seller's catalogue reached the model.
     assert "Silk Scarf" in captured.system_prompt
+
+
+def test_messenger_image_is_retained_without_spending_an_ai_reply(client, seller, db):
+    wh.connect(client, seller, external_id="page-1")
+    payload = wh.messenger_payload(
+        "page-1", "psid-1", "", mid="mid.receipt",
+        attachments=[{"type": "image", "payload": {
+            "url": "https://scontent.xx.fbcdn.net/receipt.jpg"
+        }}],
+    )
+    retained = AttachmentDownload(b"receipt-bytes", "image/jpeg", "receipt.jpg")
+
+    with mock.patch("app.services.inbound.download_attachment", return_value=retained), \
+            wh.sends() as sent, ai.replies() as captured:
+        r = wh.post_messenger(client, payload)
+
+    assert r.status_code == 200
+    stored = thread(client, seller)
+    assert len(stored) == 1
+    assert stored[0]["message_type"] == "image"
+    assert stored[0]["content"] is None
+    assert stored[0]["attachments"][0]["file_size"] == len(b"receipt-bytes")
+    assert stored[0]["attachments"][0]["review_status"] == "pending"
+    assert sent == []
+    assert captured == {}, "an attachment without a caption is evidence, not an AI prompt"
+
+
+def test_telegram_photo_uses_the_largest_variant_and_caption():
+    parsed = parse_telegram_update({
+        "update_id": 77,
+        "message": {
+            "from": {"id": 5, "is_bot": False, "first_name": "Srey"},
+            "chat": {"id": 5},
+            "caption": "Paid",
+            "photo": [
+                {"file_id": "small", "file_size": 10},
+                {"file_id": "large", "file_size": 200},
+            ],
+        },
+    })
+
+    assert parsed is not None
+    assert parsed.text == "Paid"
+    assert parsed.attachments[0].platform_file_id == "large"
 
 
 def mock_token(db):
@@ -333,8 +379,6 @@ def test_an_unknown_connection_answers_like_a_bad_secret(client, seller):
 @pytest.mark.parametrize("payload", [
     {"update_id": 1, "edited_message": {"text": "changed", "chat": {"id": 1},
                                         "from": {"id": 1, "is_bot": False}}},
-    {"update_id": 2, "message": {"chat": {"id": 1}, "from": {"id": 1, "is_bot": False},
-                                 "photo": [{"file_id": "x"}]}},
     {"update_id": 3, "message": {"text": "hi", "chat": {"id": 1},
                                  "from": {"id": 1, "is_bot": True}}},
     {"update_id": 4},

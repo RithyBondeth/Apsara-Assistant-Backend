@@ -198,6 +198,7 @@ async def receive_stripe_event(
         # once for a single payment. Writing only on the transition keeps
         # paid_at the time of the payment rather than the last retry.
         order.payment_status = PAID
+        order.payment_method = "stripe"
         order.paid_at = utcnow()
         db.commit()
         logger.info("Order %s marked paid from Stripe session %s",

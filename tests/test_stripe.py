@@ -165,6 +165,7 @@ def test_a_signed_completion_marks_the_order_paid(client, seller, db,
     assert r.status_code == 200
     row = db.query(Order).filter(Order.id == order["id"]).first()
     assert row.payment_status == "paid"
+    assert row.payment_method == "stripe"
     assert row.paid_at is not None
 
 
