@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import attachments, auth, products, customers, conversations, orders, chat, webhooks, integrations, inventory
+from app.api.v1.endpoints import attachments, auth, products, customers, conversations, orders, chat, webhooks, integrations, inventory, media, payment_qrs
 
 api_router = APIRouter()
 
@@ -13,4 +13,6 @@ api_router.include_router(attachments.router, prefix="/attachments", tags=["atta
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(integrations.router, prefix="/integrations", tags=["integrations"])
 api_router.include_router(inventory.router, prefix="/inventory", tags=["inventory"])
+api_router.include_router(payment_qrs.router, prefix="/payment-qrs", tags=["payment-qrs"])
+api_router.include_router(media.router, prefix="/media", tags=["media"])
 api_router.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])

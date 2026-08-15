@@ -13,6 +13,7 @@ from app.models.attachment import Attachment
 from app.models.message import Message
 from app.models.product import Product
 from app.models.user import User
+from app.services.payment_qrs import default_payment_qr_url
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ def _client() -> OpenAI:
 def build_system_prompt(user: User, products: list[Product]) -> str:
     business = user.business_name or user.full_name
     currency = user.currency
+    payment_qr = default_payment_qr_url(user)
 
     product_lines: list[str] = []
     for p in products[:CATALOGUE_LIMIT]:
@@ -106,7 +108,7 @@ then the QR image.
   mention the marker itself to the customer
 - Payment does not confirm the order — after they pay, tell them the seller
   will check the transfer and confirm
-""" if user.payment_qr_url else ""
+""" if payment_qr else ""
 
     return f"""You are Apsara, an AI-powered sales assistant for "{business}".
 

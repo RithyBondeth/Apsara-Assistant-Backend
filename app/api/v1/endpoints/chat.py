@@ -27,6 +27,7 @@ from app.services.ai_service import (
     payment_qr_message,
     split_payment_qr,
 )
+from app.services.payment_qrs import default_payment_qr_url
 
 router = APIRouter()
 
@@ -210,8 +211,9 @@ def chat(
     db.add(ai_msg)
 
     qr_msg = None
-    if wants_qr and current_user.payment_qr_url:
-        qr_msg = payment_qr_message(conversation_id, current_user.payment_qr_url)
+    qr_url = default_payment_qr_url(current_user) if wants_qr else None
+    if qr_url:
+        qr_msg = payment_qr_message(conversation_id, qr_url)
         db.add(qr_msg)
 
     conversation.updated_at = utcnow()

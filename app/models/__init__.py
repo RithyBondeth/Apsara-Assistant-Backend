@@ -12,6 +12,8 @@ from app.models.job import Job
 from app.models.ai_usage import AiUsage
 from app.models.login_attempt import LoginAttempt
 from app.models.inventory_movement import InventoryMovement
+from app.models.product_image import ProductImage
+from app.models.payment_qr import PaymentQr
 
 __all__ = [
     "User",
@@ -28,4 +30,6 @@ __all__ = [
     "AiUsage",
     "LoginAttempt",
     "InventoryMovement",
+    "ProductImage",
+    "PaymentQr",
 ]

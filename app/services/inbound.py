@@ -40,6 +40,7 @@ from app.services.platforms import (
 )
 from app.services.queue import register
 from app.services.quota import spend_reply
+from app.services.payment_qrs import default_payment_qr_url
 
 logger = logging.getLogger(__name__)
 
@@ -329,4 +330,4 @@ def _generate(db: Session, connection: PlatformConnection,
     reply, wants_qr = split_payment_qr(raw)
     # Guarded against the seller having cleared their QR since the prompt was
     # built, and against a model that emits the marker regardless.
-    return reply, seller.payment_qr_url if wants_qr else None
+    return reply, default_payment_qr_url(seller) if wants_qr else None
