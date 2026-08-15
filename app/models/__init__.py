@@ -1,7 +1,7 @@
 from app.models.user import User
 from app.models.customer import Customer
 from app.models.product import Product
-from app.models.conversation import Conversation
+from app.models.conversation import Conversation, ConversationNote, ConversationTag
 from app.models.message import Message
 from app.models.attachment import Attachment
 from app.models.order import Order
@@ -22,6 +22,8 @@ __all__ = [
     "Customer",
     "Product",
     "Conversation",
+    "ConversationNote",
+    "ConversationTag",
     "Message",
     "Attachment",
     "Order",

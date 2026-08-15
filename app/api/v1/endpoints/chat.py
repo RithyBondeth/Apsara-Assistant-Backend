@@ -177,7 +177,11 @@ def chat(
         content=content,
     )
     db.add(customer_msg)
-    conversation.updated_at = utcnow()
+    now = utcnow()
+    conversation.updated_at = now
+    if conversation.first_customer_message_at is None:
+        conversation.first_customer_message_at = now
+    conversation.last_customer_message_at = now
     db.commit()
     db.refresh(customer_msg)
 
@@ -239,7 +243,10 @@ def chat(
         qr_msg = payment_qr_message(conversation_id, qr_url)
         db.add(qr_msg)
 
-    conversation.updated_at = utcnow()
+    now = utcnow()
+    conversation.updated_at = now
+    if conversation.first_response_at is None:
+        conversation.first_response_at = now
     db.commit()
     db.refresh(ai_msg)
     if qr_msg is not None:
