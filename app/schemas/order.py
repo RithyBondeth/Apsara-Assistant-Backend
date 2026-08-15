@@ -48,6 +48,7 @@ class OrderOut(BaseModel):
     currency: str
     delivery_address: str | None
     notes: str | None
+    reservation_expires_at: datetime | None
     payment_status: str
     payment_method: str | None
     payment_receipt_attachment_id: UUID | None

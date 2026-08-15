@@ -35,6 +35,7 @@ class Order(Base):
     currency = Column(String(3), nullable=False, server_default="USD")
     delivery_address = Column(Text)
     notes = Column(Text)
+    reservation_expires_at = Column(DateTime, index=True)
 
     # Payment is tracked apart from `status`, not folded into it. The two answer
     # different questions — an order can be paid and not yet shipped, or
@@ -59,3 +60,4 @@ class Order(Base):
     customer = relationship("Customer", back_populates="orders")
     conversation = relationship("Conversation", back_populates="orders")
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+    inventory_movements = relationship("InventoryMovement", back_populates="order")

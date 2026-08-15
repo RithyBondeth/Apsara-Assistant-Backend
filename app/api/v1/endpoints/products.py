@@ -9,6 +9,7 @@ from app.database import get_db
 from app.models.product import Product
 from app.models.user import User
 from app.schemas.product import ProductCreate, ProductOut, ProductUpdate
+from app.services.inventory import move_stock
 
 router = APIRouter()
 
@@ -33,8 +34,20 @@ def create_product(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    product = Product(**payload.model_dump(), user_id=current_user.id)
+    data = payload.model_dump()
+    opening_stock = data.pop("stock")
+    product = Product(**data, stock=0, user_id=current_user.id)
     db.add(product)
+    db.flush()
+    if opening_stock:
+        move_stock(
+            db,
+            product,
+            available_delta=opening_stock,
+            kind="opening_balance",
+            reason="Opening balance",
+            actor_user_id=current_user.id,
+        )
     db.commit()
     db.refresh(product)
     return product
@@ -63,11 +76,22 @@ def update_product(
 ):
     product = db.query(Product).filter(
         Product.id == product_id, Product.user_id == current_user.id
-    ).first()
+    ).with_for_update().first()
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    requested_stock = data.pop("stock", None)
+    if requested_stock is not None and requested_stock != product.stock:
+        move_stock(
+            db,
+            product,
+            available_delta=requested_stock - product.stock,
+            kind="manual_adjustment",
+            reason="Stock balance changed from product editor",
+            actor_user_id=current_user.id,
+        )
+    for field, value in data.items():
         setattr(product, field, value)
     db.commit()
     db.refresh(product)
