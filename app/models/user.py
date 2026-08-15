@@ -39,3 +39,7 @@ class User(Base):
     platform_connections = relationship(
         "PlatformConnection", back_populates="user", cascade="all, delete-orphan"
     )
+    payment_qrs = relationship(
+        "PaymentQr", back_populates="user", cascade="all, delete-orphan",
+        order_by="PaymentQr.created_at",
+    )

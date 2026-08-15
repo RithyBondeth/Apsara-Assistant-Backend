@@ -7,6 +7,18 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 
+class ProductImageOut(BaseModel):
+    id: UUID
+    url: str
+    file_name: str
+    file_size: int
+    position: int
+    is_primary: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class ProductCreate(BaseModel):
     name: str
     description: str | None = None
@@ -38,8 +50,22 @@ class ProductOut(BaseModel):
     image_url: str | None
     is_active: bool
     created_at: datetime
+    images: list[ProductImageOut] = []
 
     model_config = {"from_attributes": True}
+
+
+class ProductImageOrder(BaseModel):
+    image_ids: list[UUID] = Field(min_length=1, max_length=8)
+    primary_image_id: UUID
+
+    @model_validator(mode="after")
+    def validate_image_set(self):
+        if len(set(self.image_ids)) != len(self.image_ids):
+            raise ValueError("Image ids must be unique")
+        if self.primary_image_id not in self.image_ids:
+            raise ValueError("Primary image must be included in image ids")
+        return self
 
 
 class InventoryAdjustmentCreate(BaseModel):

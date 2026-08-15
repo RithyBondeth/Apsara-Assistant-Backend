@@ -36,3 +36,9 @@ class Product(Base):
     inventory_movements = relationship(
         "InventoryMovement", back_populates="product", passive_deletes=True
     )
+    images = relationship(
+        "ProductImage",
+        back_populates="product",
+        cascade="all, delete-orphan",
+        order_by="ProductImage.position",
+    )
