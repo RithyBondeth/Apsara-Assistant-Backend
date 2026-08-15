@@ -25,6 +25,9 @@ class User(Base):
     # the image themselves, the same way product images already work. Empty
     # means the assistant simply never offers one.
     payment_qr_url = Column(String)
+    low_stock_email_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
+    low_stock_telegram_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    low_stock_telegram_chat_id = Column(String(100))
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

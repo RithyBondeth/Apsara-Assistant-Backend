@@ -22,6 +22,7 @@ from app.schemas.product import (
     ProductVariantUpdate,
 )
 from app.services.inventory import move_stock
+from app.services.alerts import evaluate_low_stock
 from app.services.media import MAX_PRODUCT_IMAGES, read_image_upload
 from app.services.variants import MAX_VARIANTS_PER_PRODUCT, clean_options, sync_product_totals
 
@@ -91,6 +92,8 @@ def create_product(
                     reason="Opening balance",
                     actor_user_id=current_user.id,
                 )
+            else:
+                evaluate_low_stock(db, product, variant)
         sync_product_totals(db, product)
         db.commit()
     except IntegrityError as exc:
@@ -189,6 +192,8 @@ def create_product_variant(
                 reason="Variant opening balance",
                 actor_user_id=current_user.id,
             )
+        else:
+            evaluate_low_stock(db, product, variant)
         sync_product_totals(db, product)
         db.commit()
     except IntegrityError as exc:
@@ -220,6 +225,7 @@ def update_product_variant(
         setattr(variant, field, value)
     try:
         db.flush()
+        evaluate_low_stock(db, product, variant)
         sync_product_totals(db, product)
         db.commit()
     except IntegrityError as exc:

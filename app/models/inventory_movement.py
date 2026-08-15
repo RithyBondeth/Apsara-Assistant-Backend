@@ -35,6 +35,8 @@ class InventoryMovement(Base):
     order_id = Column(
         UUID(as_uuid=True), ForeignKey("orders.id", ondelete="SET NULL"), nullable=True
     )
+    purchase_order_id = Column(UUID(as_uuid=True), ForeignKey("purchase_orders.id", ondelete="SET NULL"))
+    sales_return_id = Column(UUID(as_uuid=True), ForeignKey("sales_returns.id", ondelete="SET NULL"))
     created_by_user_id = Column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

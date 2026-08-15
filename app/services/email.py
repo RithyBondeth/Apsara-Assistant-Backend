@@ -15,7 +15,7 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-def send_email(to: str, subject: str, body: str) -> None:
+def send_email(to: str, subject: str, body: str) -> bool:
     """Send one plain-text email.
 
     Never raises: callers run inside request handlers whose response must not
@@ -28,7 +28,7 @@ def send_email(to: str, subject: str, body: str) -> None:
             "  To: %s\n  Subject: %s\n\n%s",
             to, subject, body,
         )
-        return
+        return False
 
     message = EmailMessage()
     message["From"] = settings.SMTP_FROM
@@ -43,10 +43,12 @@ def send_email(to: str, subject: str, body: str) -> None:
             if settings.SMTP_USER:
                 smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             smtp.send_message(message)
+        return True
     except Exception:
         # Logged rather than raised: telling the caller that delivery failed
         # would reveal that the address belongs to a real account.
         logger.exception("Failed to send email to %s", to)
+        return False
 
 
 def send_password_reset(to: str, token: str) -> None:

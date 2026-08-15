@@ -23,6 +23,9 @@ class UserUpdate(BaseModel):
     business_name: str | None = None
     currency: TCurrency | None = None
     payment_qr_url: str | None = None
+    low_stock_email_enabled: bool | None = None
+    low_stock_telegram_enabled: bool | None = None
+    low_stock_telegram_chat_id: str | None = Field(default=None, max_length=100)
 
     @field_validator("payment_qr_url")
     @classmethod
@@ -51,6 +54,9 @@ class UserOut(BaseModel):
     business_name: str | None
     currency: str
     payment_qr_url: str | None
+    low_stock_email_enabled: bool
+    low_stock_telegram_enabled: bool
+    low_stock_telegram_chat_id: str | None
     is_active: bool
     created_at: datetime
 

@@ -33,6 +33,8 @@ def move_stock(
     reason: str | None = None,
     order_id: UUID | None = None,
     actor_user_id: UUID | None = None,
+    purchase_order_id: UUID | None = None,
+    sales_return_id: UUID | None = None,
 ) -> InventoryMovement:
     """Apply one locked stock mutation and append its immutable audit entry."""
     new_available = variant.stock + available_delta
@@ -63,6 +65,8 @@ def move_stock(
         variant_name=variant_label(variant),
         variant_sku=variant.sku,
         order_id=order_id,
+        purchase_order_id=purchase_order_id,
+        sales_return_id=sales_return_id,
         created_by_user_id=actor_user_id,
         kind=kind,
         quantity_delta=available_delta,
@@ -71,6 +75,8 @@ def move_stock(
         reason=reason,
     )
     db.add(movement)
+    from app.services.alerts import evaluate_low_stock
+    evaluate_low_stock(db, product, variant)
     return movement
 
 

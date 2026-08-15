@@ -15,6 +15,7 @@ from app.database import SessionLocal
 
 # Importing for the side effect of registering the handlers on the queue.
 from app.services import inbound  # noqa: F401
+from app.services import alerts  # noqa: F401
 from app.services import throttle
 from app.services.queue import prune_finished, release_stuck, run_once
 
