@@ -23,6 +23,15 @@ from app.models.user import User
 from app.schemas.message import AttachmentOut
 from app.schemas.order import CheckoutOut, OrderCreate, OrderOut, OrderUpdate
 from app.services import stripe_gateway
+from app.services.inventory import (
+    FULFILLED_STATUSES,
+    RESERVING_STATUSES,
+    lock_order_products,
+    move_stock,
+    release_expired_reservations,
+    release_order_stock,
+    reservation_deadline,
+)
 from app.services.platforms import STRIPE
 
 logger = logging.getLogger(__name__)
@@ -62,35 +71,52 @@ def _receipt_for_order(db: Session, order: Order, attachment_id: UUID,
     return receipt
 
 
-def _restock_order(db: Session, order: Order) -> None:
-    """Return each line item's quantity back to the product's stock."""
-    for item in order.items:
-        product = db.query(Product).filter(Product.id == item.product_id).with_for_update().first()
-        if product is not None:
-            product.stock += item.quantity
-
-
-def _deduct_order(db: Session, order: Order) -> None:
+def _deduct_order(
+    db: Session, order: Order, *, reserve: bool, actor_user_id: UUID | None = None
+) -> None:
     """Take each line item's quantity back out of stock.
 
     Used when a cancelled order is revived: cancelling returned the goods to
     inventory, so re-activating has to take them out again or the order ships
     stock the seller never gave up.
     """
+    products = lock_order_products(db, order)
     for item in order.items:
-        product = db.query(Product).filter(Product.id == item.product_id).with_for_update().first()
+        product = products.get(item.product_id)
         if product is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot reopen this order: a product on it no longer exists",
             )
-        if product.stock < item.quantity:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot reopen this order: insufficient stock for '{product.name}' "
-                       f"(available: {product.stock}, needed: {item.quantity})",
+        move_stock(
+            db,
+            product,
+            available_delta=-item.quantity,
+            reserved_delta=item.quantity if reserve else 0,
+            kind="reservation_reopened" if reserve else "order_reopened",
+            reason=f"Order {order.id} reopened",
+            order_id=order.id,
+            actor_user_id=actor_user_id,
+        )
+
+
+def _change_reserved_stock(
+    db: Session, order: Order, *, delta_sign: int, kind: str, actor_user_id: UUID
+) -> None:
+    products = lock_order_products(db, order)
+    for item in order.items:
+        product = products.get(item.product_id)
+        if product is not None:
+            move_stock(
+                db,
+                product,
+                available_delta=0,
+                reserved_delta=delta_sign * item.quantity,
+                kind=kind,
+                reason=f"Order {order.id} status changed",
+                order_id=order.id,
+                actor_user_id=actor_user_id,
             )
-        product.stock -= item.quantity
 
 
 @router.get("/", response_model=list[OrderOut])
@@ -116,10 +142,21 @@ def create_order(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # Expired pending reservations must not make a sellable item appear
+    # unavailable when the next customer orders it.
+    release_expired_reservations(db, current_user.id)
     if not payload.items:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Order must contain at least one item"
         )
+
+    quantities: dict[UUID, int] = {}
+    for item in payload.items:
+        if item.quantity <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Item quantity must be positive"
+            )
+        quantities[item.product_id] = quantities.get(item.product_id, 0) + item.quantity
 
     # Verify the customer belongs to the seller
     customer = db.query(Customer).filter(
@@ -143,58 +180,66 @@ def create_order(
         delivery_address=payload.delivery_address,
         notes=payload.notes,
         status="pending",
+        reservation_expires_at=reservation_deadline(),
         total_amount=0,
         # Snapshot, not a lookup: if the seller later switches currency, this
         # order must keep the one it was actually priced and agreed in.
         currency=current_user.currency,
     )
+    db.add(order)
+    db.flush()
 
     total = 0
-    for item in payload.items:
-        if item.quantity <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Item quantity must be positive"
-            )
+    product_ids = sorted(quantities, key=str)
+    locked_products = (
+        db.query(Product)
+        .filter(Product.id.in_(product_ids), Product.user_id == current_user.id)
+        .order_by(Product.id)
+        .with_for_update()
+        .all()
+    )
+    products_by_id = {product.id: product for product in locked_products}
 
+    for product_id in product_ids:
+        quantity = quantities[product_id]
         # Locked for the transaction: checking stock and then decrementing it is
-        # a read-then-write, and two concurrent orders would otherwise both pass
-        # the check and oversell.
-        product = db.query(Product).filter(
-            Product.id == item.product_id, Product.user_id == current_user.id
-        ).with_for_update().first()
+        # a read-then-write. Stable lock order also prevents two multi-product
+        # orders from deadlocking when their lines arrive in opposite order.
+        product = products_by_id.get(product_id)
         if not product:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Product {item.product_id} not found",
+                detail=f"Product {product_id} not found",
             )
         if not product.is_active:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Product '{product.name}' is not available",
             )
-        if product.stock < item.quantity:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Insufficient stock for '{product.name}' (available: {product.stock})",
-            )
-
         # Use the product's server-side price as the source of truth
         unit_price = product.price
-        subtotal = unit_price * item.quantity
+        subtotal = unit_price * quantity
         total += subtotal
-        product.stock -= item.quantity
+        move_stock(
+            db,
+            product,
+            available_delta=-quantity,
+            reserved_delta=quantity,
+            kind="reservation_created",
+            reason=f"Reserved for order {order.id}",
+            order_id=order.id,
+        )
 
         order.items.append(
             OrderItem(
                 product_id=product.id,
-                quantity=item.quantity,
+                quantity=quantity,
                 unit_price=unit_price,
                 subtotal=subtotal,
             )
         )
 
     order.total_amount = total
-    db.add(order)
     db.commit()
     db.refresh(order)
     return order
@@ -206,11 +251,7 @@ def get_order(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    order = db.query(Order).options(joinedload(Order.items)).filter(
-        Order.id == order_id, Order.user_id == current_user.id
-    ).first()
-    if not order:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+    order = _owned_order(db, order_id, current_user.id)
     return order
 
 
@@ -221,11 +262,7 @@ def update_order(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    order = db.query(Order).options(joinedload(Order.items)).filter(
-        Order.id == order_id, Order.user_id == current_user.id
-    ).first()
-    if not order:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+    order = _owned_order(db, order_id, current_user.id, lock=True)
 
     data = payload.model_dump(exclude_unset=True)
     new_status = data.get("status")
@@ -235,12 +272,35 @@ def update_order(
             detail=f"Invalid status. Must be one of: {', '.join(sorted(VALID_STATUSES))}",
         )
 
-    # Stock follows the cancelled/not-cancelled boundary in both directions
+    # Stock follows both the cancelled boundary and the reserved/fulfilled
+    # boundary, so the available balance and reserved subtotal remain distinct.
     if new_status is not None and new_status != order.status:
         if new_status == "cancelled":
-            _restock_order(db, order)
+            release_order_stock(
+                db, order, kind="order_cancelled", actor_user_id=current_user.id
+            )
         elif order.status == "cancelled":
-            _deduct_order(db, order)
+            _deduct_order(
+                db,
+                order,
+                reserve=new_status in RESERVING_STATUSES,
+                actor_user_id=current_user.id,
+            )
+        elif order.status in RESERVING_STATUSES and new_status in FULFILLED_STATUSES:
+            _change_reserved_stock(
+                db, order, delta_sign=-1, kind="reservation_fulfilled",
+                actor_user_id=current_user.id,
+            )
+        elif order.status in FULFILLED_STATUSES and new_status in RESERVING_STATUSES:
+            _change_reserved_stock(
+                db, order, delta_sign=1, kind="reservation_restored",
+                actor_user_id=current_user.id,
+            )
+
+        if new_status == "pending":
+            order.reservation_expires_at = reservation_deadline()
+        elif new_status != "cancelled":
+            order.reservation_expires_at = None
 
     for field, value in data.items():
         setattr(order, field, value)
@@ -317,6 +377,10 @@ def create_checkout(
     # page is outstanding, which is what the seller sees while waiting.
     if order.payment_status == UNPAID:
         order.payment_status = PAYMENT_PENDING
+    if order.status == "pending":
+        # A newly issued checkout is a live customer commitment; keep its
+        # reservation for the lifetime of the fresh payment link.
+        order.reservation_expires_at = reservation_deadline()
     db.commit()
 
     return CheckoutOut(checkout_url=session.url, session_id=session.id,
@@ -411,15 +475,13 @@ def delete_order(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    order = db.query(Order).options(joinedload(Order.items)).filter(
-        Order.id == order_id, Order.user_id == current_user.id
-    ).first()
-    if not order:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+    order = _owned_order(db, order_id, current_user.id, lock=True)
 
-    # A cancelled order has already had its stock returned; don't restock twice
+    # A cancelled order has already had its stock returned; don't restock twice.
     if order.status != "cancelled":
-        _restock_order(db, order)
+        release_order_stock(
+            db, order, kind="order_deleted", actor_user_id=current_user.id
+        )
 
     db.delete(order)
     db.commit()

@@ -11,6 +11,7 @@ from app.models.platform_connection import PlatformConnection
 from app.models.job import Job
 from app.models.ai_usage import AiUsage
 from app.models.login_attempt import LoginAttempt
+from app.models.inventory_movement import InventoryMovement
 
 __all__ = [
     "User",
@@ -26,4 +27,5 @@ __all__ = [
     "Job",
     "AiUsage",
     "LoginAttempt",
+    "InventoryMovement",
 ]

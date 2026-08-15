@@ -200,6 +200,9 @@ async def receive_stripe_event(
         order.payment_status = PAID
         order.payment_method = "stripe"
         order.paid_at = utcnow()
+        # Paid stock must never be released by reservation expiry even if the
+        # seller has not yet moved the order from pending to confirmed.
+        order.reservation_expires_at = None
         db.commit()
         logger.info("Order %s marked paid from Stripe session %s",
                     order.id, session.get("id"))
