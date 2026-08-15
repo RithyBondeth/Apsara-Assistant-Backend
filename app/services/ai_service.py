@@ -86,14 +86,26 @@ def build_system_prompt(user: User, products: list[Product]) -> str:
             break
         active_variants = [variant for variant in p.variants if variant.is_active]
         active_variants = active_variants[:CATALOGUE_VARIANT_LIMIT - rendered_variants]
+        single_default = (
+            len(active_variants) == 1
+            and not active_variants[0].option_values
+        )
         line = (
-            f"• {p.name}"
-            if active_variants
-            else f"• {p.name} — {format_amount(p.price, currency)}"
+            f"• {p.name} — {format_amount(active_variants[0].price, currency)}"
+            if single_default
+            else (
+                f"• {p.name}"
+                if active_variants
+                else f"• {p.name} — {format_amount(p.price, currency)}"
+            )
         )
         if p.description:
             line += f"\n  {p.description}"
-        if active_variants:
+        if single_default:
+            variant = active_variants[0]
+            line += f"\n  {'OUT OF STOCK' if not variant.stock else f'Stock: {variant.stock} units'}"
+            rendered_variants += 1
+        elif active_variants:
             for variant in active_variants:
                 options = ", ".join(
                     f"{name}: {value}" for name, value in variant.option_values.items()
