@@ -1,10 +1,10 @@
 import uuid
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
+from app.core.clock import utcnow
 from app.database import Base
 
 # purpose: password_reset, login_otp
@@ -27,6 +27,6 @@ class VerificationCode(Base):
     expires_at = Column(DateTime, nullable=False)
     consumed_at = Column(DateTime)
     attempts = Column(Integer, nullable=False, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     user = relationship("User", back_populates="verification_codes")

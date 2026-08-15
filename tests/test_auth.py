@@ -1,11 +1,12 @@
 """Registration, sign-in, password reset and one-time-code login."""
 
 import hashlib
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 
 from app.core.config import settings
+from app.core.clock import utcnow
 from app.models.user import User
 from app.models.verification_code import VerificationCode
 from app.services import verification
@@ -45,6 +46,21 @@ def test_register_then_sign_in(client):
     me = client.get("/api/v1/auth/me", headers=seller.headers)
     assert me.status_code == 200
     assert me.json()["email"] == seller.email
+
+
+def test_browser_session_uses_an_httponly_cookie(client):
+    seller = register(client)
+    login_response = login(client, seller.email, PASSWORD)
+    assert "httponly" in login_response.headers["set-cookie"].lower()
+    cookie = client.cookies.get(settings.AUTH_COOKIE_NAME)
+    assert cookie
+
+    # No Authorization header: the browser cookie is sufficient.
+    assert client.get("/api/v1/auth/me").json()["email"] == seller.email
+
+    response = client.post("/api/v1/auth/logout")
+    assert response.status_code == 204
+    assert client.get("/api/v1/auth/me").status_code == 401
 
 
 def test_short_passwords_are_refused(client):
@@ -106,7 +122,7 @@ def test_expired_reset_token_is_refused(client, mail, db):
     _, _, token = mail[0]
     record = db.query(VerificationCode).filter(
         VerificationCode.purpose == verification.PASSWORD_RESET).first()
-    record.expires_at = datetime.utcnow() - timedelta(minutes=1)
+    record.expires_at = utcnow() - timedelta(minutes=1)
     db.commit()
 
     r = client.post("/api/v1/auth/reset-password",

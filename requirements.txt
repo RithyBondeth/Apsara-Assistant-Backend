@@ -17,5 +17,7 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 python-multipart==0.0.20
 openai==1.57.4
-boto3==1.35.86
+# Card payments. Each seller's own key is used per call, so nothing is
+# configured globally here — see app/services/stripe_gateway.py.
+stripe==11.4.1
 httpx==0.28.1

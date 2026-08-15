@@ -1,13 +1,18 @@
 import uuid
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
+from app.core.clock import utcnow
 from app.database import Base
 
 # status: pending, confirmed, processing, shipped, delivered, cancelled
+# payment_status: unpaid, pending, paid
+
+UNPAID = "unpaid"
+PAYMENT_PENDING = "pending"
+PAID = "paid"
 
 
 class Order(Base):
@@ -24,8 +29,18 @@ class Order(Base):
     currency = Column(String(3), nullable=False, server_default="USD")
     delivery_address = Column(Text)
     notes = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Payment is tracked apart from `status`, not folded into it. The two answer
+    # different questions — an order can be paid and not yet shipped, or
+    # delivered and still unpaid on a cash-on-delivery sale — and a single
+    # column would force one to overwrite the other.
+    payment_status = Column(String, nullable=False, server_default=UNPAID)
+    # Latest Stripe Checkout Session for this order. Indexed because the webhook
+    # arrives knowing only this. Replaced when a seller reissues an expired link.
+    stripe_session_id = Column(String, index=True)
+    paid_at = Column(DateTime)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     user = relationship("User", back_populates="orders")
     customer = relationship("Customer", back_populates="orders")

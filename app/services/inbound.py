@@ -5,10 +5,11 @@ session and swallows its own failures — there is no request left to fail.
 """
 
 import logging
-from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.clock import utcnow
 from app.database import SessionLocal
 from app.models.conversation import Conversation
 from app.models.customer import Customer
@@ -23,11 +24,14 @@ from app.services.ai_service import (
     build_openai_messages,
     build_system_prompt,
     generate_ai_reply,
+    payment_qr_message,
+    split_payment_qr,
 )
 from app.services.platforms import (
     MESSENGER,
     InboundMessage,
     fetch_messenger_profile,
+    send_image,
     send_reply,
 )
 from app.services.queue import register
@@ -94,6 +98,7 @@ def _conversation_for(db: Session, connection: PlatformConnection,
             Conversation.user_id == connection.user_id,
             Conversation.customer_id == customer.id,
             Conversation.platform == connection.platform,
+            Conversation.platform_connection_id == connection.id,
             Conversation.status == "open",
         )
         .first()
@@ -105,6 +110,8 @@ def _conversation_for(db: Session, connection: PlatformConnection,
         user_id=connection.user_id,
         customer_id=customer.id,
         platform=connection.platform,
+        platform_connection_id=connection.id,
+        source="channel",
     )
     db.add(conversation)
     db.flush()
@@ -120,10 +127,8 @@ def _already_handled(db: Session, connection: PlatformConnection,
     """
     return (
         db.query(Message.id)
-        .join(Conversation, Message.conversation_id == Conversation.id)
         .filter(
-            Conversation.user_id == connection.user_id,
-            Conversation.platform == connection.platform,
+            Message.platform_connection_id == connection.id,
             Message.external_id == message.external_id,
         )
         .first()
@@ -172,15 +177,24 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
 
         db.add(Message(
             conversation_id=conversation.id,
+            platform_connection_id=connection.id,
             sender_type="customer",
             message_type="text",
             content=message.text,
             external_id=message.external_id,
         ))
-        conversation.updated_at = datetime.utcnow()
+        conversation.updated_at = utcnow()
         # Committed before the model is called: the customer's message belongs
         # in the thread whether or not a reply can be produced.
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # A redelivery can be claimed concurrently by two workers. The
+            # database uniqueness constraint is the final idempotency guard.
+            db.rollback()
+            logger.info("Ignoring concurrently handled %s message %s",
+                        connection.platform, message.external_id)
+            return
 
         if not connection.auto_reply:
             return
@@ -192,25 +206,47 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
                            connection.platform)
             return
 
-        reply = _generate(db, connection, conversation)
-        if reply is None:
+        generated = _generate(db, connection, conversation)
+        if generated is None:
             return
+        reply, qr_url = generated
 
-        if send_reply(connection.platform, connection.access_token,
-                      message.sender_id, reply):
+        # Nothing below stores a message the platform refused: the customer
+        # never saw it, so recording it would leave the seller reading a
+        # thread that did not happen.
+        delivered = False
+
+        if reply:
+            if not send_reply(connection.platform, connection.access_token,
+                              message.sender_id, reply):
+                logger.error("Reply generated but not delivered for conversation %s",
+                             conversation.id)
+                # A payment QR arriving with no message explaining it is
+                # worse than nothing, so it does not follow a failed reply.
+                return
             db.add(Message(
                 conversation_id=conversation.id,
                 sender_type="assistant",
                 message_type="text",
                 content=reply,
             ))
-            conversation.updated_at = datetime.utcnow()
+            delivered = True
+
+        if qr_url:
+            if send_image(connection.platform, connection.access_token,
+                          message.sender_id, qr_url):
+                db.add(payment_qr_message(conversation.id, qr_url))
+                delivered = True
+            else:
+                # The text has already gone out, so the customer is not left
+                # in silence — they are left waiting on an image the seller
+                # needs to know never arrived.
+                logger.error("Payment QR not delivered for conversation %s",
+                             conversation.id)
+
+        if delivered:
+            conversation.updated_at = utcnow()
             db.commit()
-        else:
-            # Not stored: the customer never saw it, so recording it would
-            # leave the seller reading a thread that did not happen.
-            logger.error("Reply generated but not delivered for conversation %s",
-                         conversation.id)
     except Exception:
         db.rollback()
         logger.exception("Failed to handle an inbound %s message", connection_id)
@@ -219,7 +255,12 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
 
 
 def _generate(db: Session, connection: PlatformConnection,
-              conversation: Conversation) -> str | None:
+              conversation: Conversation) -> tuple[str, str | None] | None:
+    """The reply text and, when the assistant asked for it, the QR to attach.
+
+    `None` means no reply could be produced at all — distinct from a reply
+    that carries no QR.
+    """
     seller = db.query(User).filter(User.id == connection.user_id).first()
     if not seller:
         return None
@@ -240,7 +281,7 @@ def _generate(db: Session, connection: PlatformConnection,
     )
 
     try:
-        return generate_ai_reply(
+        raw = generate_ai_reply(
             build_openai_messages(build_system_prompt(seller, products),
                                   list(reversed(recent)))
         )
@@ -249,3 +290,8 @@ def _generate(db: Session, connection: PlatformConnection,
         # the seller sees it in the inbox and can answer by hand.
         logger.warning("No reply generated for conversation %s", conversation.id)
         return None
+
+    reply, wants_qr = split_payment_qr(raw)
+    # Guarded against the seller having cleared their QR since the prompt was
+    # built, and against a model that emits the marker regardless.
+    return reply, seller.payment_qr_url if wants_qr else None

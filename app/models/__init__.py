@@ -10,6 +10,7 @@ from app.models.verification_code import VerificationCode
 from app.models.platform_connection import PlatformConnection
 from app.models.job import Job
 from app.models.ai_usage import AiUsage
+from app.models.login_attempt import LoginAttempt
 
 __all__ = [
     "User",
@@ -24,4 +25,5 @@ __all__ = [
     "PlatformConnection",
     "Job",
     "AiUsage",
+    "LoginAttempt",
 ]

@@ -8,6 +8,7 @@ import pytest
 from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.message import Message
+from app.services import ai_service
 from tests import ai, webhooks as wh
 
 
@@ -462,3 +463,139 @@ def test_a_name_the_seller_set_is_not_overwritten(client, seller, db, profile):
 
     db.expire_all()
     assert db.query(Customer).one().name == "Neang (VIP)"
+
+
+def test_seller_can_reply_to_the_exact_connected_channel(client, seller, db, monkeypatch):
+    integration = wh.connect(client, seller, external_id="page-1")
+    client.patch(
+        f"/api/v1/integrations/{integration['id']}",
+        json={"auto_reply": False},
+        headers=seller.headers,
+    )
+    with wh.sends(), ai.replies():
+        wh.post_messenger(client, wh.messenger_payload("page-1", "psid-1", "hello"))
+
+    conversation = conversation_of(client, seller)
+    assert conversation["platform_connection_id"] == integration["id"]
+    assert conversation["source"] == "channel"
+    sent = []
+
+    def deliver(platform, token, recipient_id, text):
+        sent.append((platform, recipient_id, text))
+        return True
+
+    import app.api.v1.endpoints.conversations as conversations_endpoint
+    monkeypatch.setattr(conversations_endpoint, "send_reply", deliver)
+    response = client.post(
+        f"/api/v1/conversations/{conversation['id']}/messages",
+        json={"content": "I can help with that."},
+        headers=seller.headers,
+    )
+
+    assert response.status_code == 201, response.text
+    assert sent == [("messenger", "psid-1", "I can help with that.")]
+    assert response.json()["sender_type"] == "seller"
+
+
+def test_disconnected_channel_never_turns_into_an_ai_rehearsal(client, seller, db):
+    integration = wh.connect(client, seller, external_id="page-1")
+    client.patch(
+        f"/api/v1/integrations/{integration['id']}",
+        json={"auto_reply": False},
+        headers=seller.headers,
+    )
+    with wh.sends(), ai.replies():
+        wh.post_messenger(client, wh.messenger_payload("page-1", "psid-1", "hello"))
+    conversation = conversation_of(client, seller)
+    client.delete(f"/api/v1/integrations/{integration['id']}", headers=seller.headers)
+
+    response = client.post(
+        f"/api/v1/conversations/{conversation['id']}/messages",
+        json={"content": "Are you still there?"},
+        headers=seller.headers,
+    )
+
+    assert response.status_code == 409
+    assert "unavailable" in response.json()["detail"]
+    assert [message.sender_type for message in messages_for(db)] == ["customer"]
+
+
+# ── The shop's payment QR ────────────────────────────────────────────────────
+
+QR = "https://cdn.example/qr.png"
+PAY_NOW = f"Scan this to pay.\n{ai_service.PAYMENT_QR_MARKER}"
+
+
+def set_qr(client, seller, url=QR):
+    r = client.patch("/api/v1/auth/me", json={"payment_qr_url": url},
+                     headers=seller.headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_the_qr_follows_the_reply_as_its_own_message(client, seller, db):
+    set_qr(client, seller)
+    wh.connect(client, seller, external_id="page-1")
+
+    with wh.sends() as sent, wh.sends_images() as images, ai.replies(PAY_NOW):
+        r = wh.post_messenger(client, wh.messenger_payload("page-1", "psid-1",
+                                                           "I'll take it"))
+
+    assert r.status_code == 200
+    assert [s["text"] for s in sent] == ["Scan this to pay."]
+    assert [i["image_url"] for i in images] == [QR]
+    assert images[0]["recipient_id"] == "psid-1"
+
+    stored = thread(client, seller)
+    assert [(m["sender_type"], m["message_type"]) for m in stored] == [
+        ("customer", "text"), ("assistant", "text"), ("assistant", "image")]
+    assert [a["file_url"] for a in stored[-1]["attachments"]] == [QR]
+
+
+def test_the_marker_never_reaches_a_customer_of_a_seller_without_a_qr(client, seller, db):
+    """The prompt does not offer the marker to them, but a model may emit it anyway."""
+    wh.connect(client, seller, external_id="page-1")
+
+    with wh.sends() as sent, wh.sends_images() as images, ai.replies(PAY_NOW):
+        wh.post_messenger(client, wh.messenger_payload("page-1", "psid-1", "how to pay?"))
+
+    assert [s["text"] for s in sent] == ["Scan this to pay."]
+    assert images == []
+    assert thread(client, seller)[-1]["message_type"] == "text"
+
+
+def test_a_qr_cleared_after_the_prompt_was_built_is_not_sent(client, seller, db):
+    set_qr(client, seller)
+    wh.connect(client, seller, external_id="page-1")
+    set_qr(client, seller, url=None)
+
+    with wh.sends(), wh.sends_images() as images, ai.replies(PAY_NOW):
+        wh.post_messenger(client, wh.messenger_payload("page-1", "psid-1", "pay?"))
+
+    assert images == []
+
+
+def test_an_undelivered_reply_takes_the_qr_with_it(client, seller, db):
+    """A QR with no message explaining it is worse than nothing."""
+    set_qr(client, seller)
+    wh.connect(client, seller, external_id="page-1")
+
+    with wh.sends(ok=False), wh.sends_images() as images, ai.replies(PAY_NOW):
+        wh.post_messenger(client, wh.messenger_payload("page-1", "psid-1", "pay?"))
+
+    assert images == []
+    assert [m["sender_type"] for m in thread(client, seller)] == ["customer"]
+
+
+def test_an_undelivered_qr_leaves_the_reply_standing(client, seller, db):
+    """The customer did read the text, so the thread must still show it."""
+    set_qr(client, seller)
+    wh.connect(client, seller, external_id="page-1")
+
+    with wh.sends(), wh.sends_images(ok=False) as images, ai.replies(PAY_NOW):
+        wh.post_messenger(client, wh.messenger_payload("page-1", "psid-1", "pay?"))
+
+    assert len(images) == 1, "delivery was attempted"
+    stored = thread(client, seller)
+    assert [(m["sender_type"], m["message_type"]) for m in stored] == [
+        ("customer", "text"), ("assistant", "text")]

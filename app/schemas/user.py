@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.core.currency import TCurrency
 from app.schemas.auth import PASSWORD_MIN_LENGTH
@@ -22,6 +22,26 @@ class UserUpdate(BaseModel):
     full_name: str | None = None
     business_name: str | None = None
     currency: TCurrency | None = None
+    payment_qr_url: str | None = None
+
+    @field_validator("payment_qr_url")
+    @classmethod
+    def _absolute_url(cls, value: str | None) -> str | None:
+        """Reject anything Messenger and Telegram could not fetch.
+
+        Both platforms download the image from this URL themselves, so a
+        relative path or a data: URI fails at the moment a customer asks to
+        pay — long after the seller has left the settings page. An empty
+        string is how the form clears the field.
+        """
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("Must be a full http:// or https:// image link")
+        return value
 
 
 class UserOut(BaseModel):
@@ -30,6 +50,7 @@ class UserOut(BaseModel):
     full_name: str
     business_name: str | None
     currency: str
+    payment_qr_url: str | None
     is_active: bool
     created_at: datetime
 

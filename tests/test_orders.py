@@ -166,6 +166,17 @@ def test_deleting_a_cancelled_order_does_not_restock_again(client, seller):
     assert seller.stock_of(product["id"]) == 8
 
 
+def test_product_on_an_order_must_be_archived_not_deleted(client, seller):
+    product = seller.product(stock=8)
+    customer = seller.customer()
+    seller.order(customer["id"], [{"product_id": product["id"], "quantity": 1}])
+
+    response = client.delete(f"/api/v1/products/{product['id']}", headers=seller.headers)
+
+    assert response.status_code == 409
+    assert "Archive it instead" in response.json()["detail"]
+
+
 def test_unknown_status_is_refused(client, seller):
     product = seller.product(stock=8)
     customer = seller.customer()

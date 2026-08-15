@@ -1,10 +1,11 @@
 """The durable job queue."""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 
 from app.models.job import FAILED, PENDING, RUNNING, SUCCEEDED, Job
+from app.core.clock import utcnow
 from app.services import queue
 from tests import ai, webhooks as wh
 
@@ -63,7 +64,7 @@ def test_a_failure_is_retried_later_not_immediately(db, handler):
     assert job.status == PENDING, "must go back on the queue"
     assert job.attempts == 1
     assert "handler blew up" in job.last_error
-    assert job.run_after > datetime.utcnow(), "backoff should defer the retry"
+    assert job.run_after > utcnow(), "backoff should defer the retry"
     # And it is not eligible yet, so a second pass finds nothing.
     assert queue.run_once(db) is False
 
@@ -78,7 +79,7 @@ def test_a_job_gives_up_after_its_attempts(db, handler):
 
     for _ in range(3):
         job = db.query(Job).one()
-        job.run_after = datetime.utcnow() - timedelta(seconds=1)
+        job.run_after = utcnow() - timedelta(seconds=1)
         db.commit()
         queue.run_once(db)
 
@@ -104,7 +105,7 @@ def test_work_left_by_a_dead_worker_is_released(db, handler):
     it. Nothing else would ever pick that up."""
     job = add(db)
     job.status = RUNNING
-    job.locked_at = datetime.utcnow() - timedelta(hours=1)
+    job.locked_at = utcnow() - timedelta(hours=1)
     db.commit()
 
     assert queue.run_once(db) is False, "still leased, so not runnable"
@@ -117,7 +118,7 @@ def test_work_left_by_a_dead_worker_is_released(db, handler):
 def test_a_freshly_claimed_job_is_left_alone(db, handler):
     job = add(db)
     job.status = RUNNING
-    job.locked_at = datetime.utcnow()
+    job.locked_at = utcnow()
     db.commit()
 
     assert queue.release_stuck(db) == 0
@@ -137,7 +138,7 @@ def test_jobs_run_oldest_first(db, handler):
     add(db, {"n": 1})
     add(db, {"n": 2})
     db.query(Job).filter(Job.payload["n"].astext == "1").update(
-        {Job.run_after: datetime.utcnow() - timedelta(minutes=5)},
+        {Job.run_after: utcnow() - timedelta(minutes=5)},
         synchronize_session=False)
     db.commit()
 
@@ -153,6 +154,21 @@ def test_drain_stops_at_its_limit(db, handler):
 
     assert queue.drain(limit=2) == 2
     assert len(handler) == 2
+
+
+def test_finished_jobs_are_pruned_after_retention(db, handler, monkeypatch):
+    old = add(db)
+    queue.run_once(db)
+    old.updated_at = utcnow() - timedelta(days=8)
+    fresh = add(db)
+    queue.run_once(db)
+    pending = add(db)
+    pending.updated_at = utcnow() - timedelta(days=8)
+    db.commit()
+    monkeypatch.setattr(queue.settings, "JOB_RETENTION_DAYS", 7)
+
+    assert queue.prune_finished(db) == 1
+    assert {job.id for job in db.query(Job).all()} == {fresh.id, pending.id}
 
 
 # ── The webhook path ─────────────────────────────────────────────────────────

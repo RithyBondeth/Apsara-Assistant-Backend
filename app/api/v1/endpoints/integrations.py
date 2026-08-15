@@ -18,6 +18,7 @@ from app.schemas.integration import (
     IntegrationUpdate,
 )
 from app.services.platforms import (
+    STRIPE,
     TELEGRAM,
     check_credentials,
     register_telegram_webhook,
@@ -26,10 +27,31 @@ from app.services.platforms import (
 router = APIRouter()
 
 
+def _webhook_secret_for(payload: IntegrationCreate) -> str | None:
+    """The secret that will authenticate this connection's webhooks.
+
+    Three different arrangements: Telegram takes one we generate and register
+    with setWebhook; Stripe issues its own when the seller creates the endpoint,
+    and it is stored encrypted because it is theirs; Messenger authenticates
+    with an app-level signature and needs nothing here.
+    """
+    if payload.platform == TELEGRAM:
+        return secrets.token_urlsafe(32)
+    if payload.platform == STRIPE:
+        return encrypt(payload.webhook_secret)
+    return None
+
+
 def _webhook_url(connection: PlatformConnection) -> str:
     base = f"{settings.API_BASE_URL.rstrip('/')}/api/v1/webhooks"
-    return (f"{base}/telegram/{connection.id}" if connection.platform == TELEGRAM
-            else f"{base}/messenger")
+    if connection.platform == TELEGRAM:
+        return f"{base}/telegram/{connection.id}"
+    if connection.platform == STRIPE:
+        # Per connection, like Telegram: a Stripe event names the account it
+        # came from only in fields the signature covers, and the signature can
+        # only be checked once we know which seller's secret to check it with.
+        return f"{base}/stripe/{connection.id}"
+    return f"{base}/messenger"
 
 
 def _to_out(connection: PlatformConnection) -> IntegrationOut:
@@ -43,7 +65,10 @@ def _to_out(connection: PlatformConnection) -> IntegrationOut:
         auto_reply=connection.auto_reply,
         created_at=connection.created_at,
         webhook_url=url,
-        webhook_secret=connection.webhook_secret,
+        # Telegram's secret is generated here, so the seller has to be able to
+        # read it back. Stripe's belongs to the seller and is stored encrypted;
+        # handing it back out would be a read path onto someone else's secret.
+        webhook_secret=connection.webhook_secret if connection.platform == TELEGRAM else None,
     )
 
 
@@ -67,15 +92,23 @@ def create_integration(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if payload.platform == STRIPE and not payload.webhook_secret:
+        # Without it there is no way to prove a payment notification is Stripe's,
+        # and an unauthenticated one would let anyone mark orders paid. Refused
+        # at connect time rather than discovered on the first real payment.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Stripe needs the signing secret (whsec_...) from the webhook "
+                   "endpoint you added in the Stripe dashboard.",
+        )
+
     connection = PlatformConnection(
         user_id=current_user.id,
         platform=payload.platform,
         external_id=payload.external_id,
         display_name=payload.display_name,
         access_token=encrypt(payload.access_token),
-        # Telegram authenticates each delivery with this; Messenger uses an
-        # app-level signature and needs none.
-        webhook_secret=secrets.token_urlsafe(32) if payload.platform == TELEGRAM else None,
+        webhook_secret=_webhook_secret_for(payload),
     )
     db.add(connection)
     try:

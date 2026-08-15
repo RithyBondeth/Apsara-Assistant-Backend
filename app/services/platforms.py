@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 MESSENGER = "messenger"
 TELEGRAM = "telegram"
+# Payments rather than messaging, but it is a per-seller connected account with
+# an encrypted credential and a signed webhook, so it lives alongside the rest.
+# The Stripe calls themselves are in app/services/stripe_gateway.py.
+STRIPE = "stripe"
 
 SEND_TIMEOUT = 10.0
 
@@ -169,6 +173,14 @@ def check_credentials(platform: str, encrypted_token: str) -> CheckResult:
                                    or f"Facebook refused the token ({response.status_code}).")
             return CheckResult(True, f"Connected to {body.get('name') or body.get('id')}.")
 
+        if platform == STRIPE:
+            # Imported here rather than at module scope: the gateway imports
+            # CheckResult from this module, and a top-level import would close
+            # the circle.
+            from app.services.stripe_gateway import check_credentials as check_stripe
+
+            return check_stripe(encrypted_token)
+
         return CheckResult(False, f"Unsupported platform {platform!r}.")
     except httpx.HTTPError as exc:
         # A network failure says nothing about the token, so do not imply it.
@@ -276,4 +288,51 @@ def send_reply(platform: str, encrypted_token: str, recipient_id: str, text: str
         return True
     except Exception:
         logger.exception("Failed to send a %s reply", platform)
+        return False
+
+
+def send_image(platform: str, encrypted_token: str, recipient_id: str,
+               image_url: str) -> bool:
+    """Deliver an image by URL. Returns whether the platform accepted it.
+
+    Both platforms fetch the URL themselves rather than taking bytes from us,
+    which is why a QR only has to be a public link. It also means a refusal
+    here can mean the image is unreachable, not that the token is bad — the
+    logged body is what tells the two apart.
+
+    Never raises, for the same reason `send_reply` does not.
+    """
+    try:
+        token = decrypt(encrypted_token)
+        if platform == MESSENGER:
+            response = httpx.post(
+                f"https://graph.facebook.com/{settings.GRAPH_API_VERSION}/me/messages",
+                params={"access_token": token},
+                json={"recipient": {"id": recipient_id},
+                      "messaging_type": "RESPONSE",
+                      "message": {"attachment": {
+                          "type": "image",
+                          # Cached by Meta after the first send, so a seller's
+                          # QR is fetched once rather than per customer.
+                          "payload": {"url": image_url, "is_reusable": True},
+                      }}},
+                timeout=SEND_TIMEOUT,
+            )
+        elif platform == TELEGRAM:
+            response = httpx.post(
+                f"https://api.telegram.org/bot{token}/sendPhoto",
+                json={"chat_id": recipient_id, "photo": image_url},
+                timeout=SEND_TIMEOUT,
+            )
+        else:
+            logger.error("No image sender for platform %r", platform)
+            return False
+
+        if response.status_code >= 400:
+            logger.error("%s rejected an image: %s %s",
+                         platform, response.status_code, response.text[:500])
+            return False
+        return True
+    except Exception:
+        logger.exception("Failed to send a %s image", platform)
         return False

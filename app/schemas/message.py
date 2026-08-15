@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AttachmentOut(BaseModel):
@@ -17,10 +17,8 @@ class AttachmentOut(BaseModel):
 
 
 class MessageCreate(BaseModel):
-    conversation_id: UUID
-    sender_type: str
     message_type: str = "text"
-    content: str | None = None
+    content: str = Field(min_length=1)
 
 
 class MessageOut(BaseModel):
