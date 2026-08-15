@@ -67,6 +67,9 @@ class Settings(BaseSettings):
 
     # Assistant replies one seller may spend per day. 0 disables the ceiling.
     AI_DAILY_REPLY_LIMIT: int = 500
+    # Seller-triggered draft generations have their own budget so using the
+    # back office cannot consume the allowance reserved for customer replies.
+    AI_DAILY_DRAFT_LIMIT: int = 100
 
     # Customer-supplied images are persisted so expiring platform URLs do not
     # destroy payment evidence. Bound each download before it reaches storage.

@@ -46,6 +46,29 @@ def spend_reply(db: Session, user_id) -> bool:
     return True
 
 
+def spend_draft(db: Session, user_id) -> bool:
+    """Count one seller-triggered order draft against its separate budget."""
+    if settings.AI_DAILY_DRAFT_LIMIT <= 0:
+        return True
+
+    statement = (
+        insert(AiUsage)
+        .values(user_id=user_id, day=utctoday(), count=0, draft_count=1)
+        .on_conflict_do_update(
+            constraint="uq_ai_usage_user_day",
+            set_={"draft_count": AiUsage.draft_count + 1},
+        )
+        .returning(AiUsage.draft_count)
+    )
+    used = db.execute(statement).scalar_one()
+    db.commit()
+    if used > settings.AI_DAILY_DRAFT_LIMIT:
+        logger.warning("Seller %s is over the daily order draft limit (%s)",
+                       user_id, settings.AI_DAILY_DRAFT_LIMIT)
+        return False
+    return True
+
+
 def used_today(db: Session, user_id) -> int:
     row = (
         db.query(AiUsage.count)
