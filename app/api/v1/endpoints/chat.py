@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user
 from app.core.clock import utcnow
@@ -58,7 +58,7 @@ def draft_order(
         raise HTTPException(status_code=400, detail="The conversation has no text to draft from")
 
     products = (
-        db.query(Product)
+        db.query(Product).options(selectinload(Product.variants))
         .filter(Product.user_id == current_user.id, Product.is_active == True)
         .order_by(Product.created_at.desc())
         .limit(CATALOGUE_LIMIT)
@@ -75,6 +75,12 @@ def draft_order(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     by_id = {product.id: product for product in products}
+    variants = {
+        variant.id: (product, variant)
+        for product in products
+        for variant in product.variants
+        if variant.is_active
+    }
     quantities: dict[UUID, int] = {}
     warnings: list[str] = []
     for item in extracted.items:
@@ -82,22 +88,39 @@ def draft_order(
         if product is None:
             warnings.append("The AI referenced a product outside the active catalogue; it was removed.")
             continue
-        quantities[product.id] = quantities.get(product.id, 0) + item.quantity
+        active_for_product = [
+            variant for owner, variant in variants.values() if owner.id == product.id
+        ]
+        selected = (
+            variants.get(item.variant_id)
+            if item.variant_id is not None
+            else ((product, active_for_product[0]) if len(active_for_product) == 1 else None)
+        )
+        if selected is None or selected[0].id != product.id:
+            warnings.append(
+                f"{product.name}: the selected variant was unavailable or did not belong to the product."
+            )
+            continue
+        selected_variant = selected[1]
+        quantities[selected_variant.id] = quantities.get(selected_variant.id, 0) + item.quantity
 
     items: list[OrderDraftItemOut] = []
-    for product_id, quantity in quantities.items():
-        product = by_id[product_id]
-        if quantity > product.stock:
+    for variant_id, quantity in quantities.items():
+        product, variant = variants[variant_id]
+        if quantity > variant.stock:
             warnings.append(
-                f"{product.name}: requested {quantity}, but only {product.stock} are in stock."
+                f"{product.name} — {variant.name}: requested {quantity}, but only {variant.stock} are in stock."
             )
         items.append(OrderDraftItemOut(
             product_id=product.id,
             product_name=product.name,
+            variant_id=variant.id,
+            variant_name=variant.name,
+            variant_options=dict(variant.option_values),
             quantity=quantity,
-            unit_price=product.price,
-            subtotal=product.price * quantity,
-            stock=product.stock,
+            unit_price=variant.price,
+            subtotal=variant.price * quantity,
+            stock=variant.stock,
         ))
 
     missing_fields: list[str] = []
@@ -162,7 +185,7 @@ def chat(
     # Bounded in the query, not just when the prompt is built — a seller with a
     # large catalogue should not pull all of it into memory on every message.
     products = (
-        db.query(Product)
+        db.query(Product).options(selectinload(Product.variants))
         .filter(Product.user_id == current_user.id, Product.is_active == True)
         .order_by(Product.created_at.desc())
         .limit(CATALOGUE_LIMIT)

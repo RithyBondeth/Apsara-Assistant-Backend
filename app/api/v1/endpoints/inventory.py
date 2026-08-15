@@ -7,6 +7,7 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.models.inventory_movement import InventoryMovement
 from app.models.product import Product
+from app.models.product_variant import ProductVariant
 from app.models.user import User
 from app.schemas.product import (
     ExpiredReservationsOut,
@@ -22,6 +23,7 @@ router = APIRouter()
 @router.get("/movements", response_model=list[InventoryMovementOut])
 def list_movements(
     product_id: UUID | None = None,
+    variant_id: UUID | None = None,
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -30,6 +32,8 @@ def list_movements(
     query = db.query(InventoryMovement).filter(InventoryMovement.user_id == current_user.id)
     if product_id is not None:
         query = query.filter(InventoryMovement.product_id == product_id)
+    if variant_id is not None:
+        query = query.filter(InventoryMovement.variant_id == variant_id)
     return query.order_by(InventoryMovement.created_at.desc()).offset(skip).limit(limit).all()
 
 
@@ -49,9 +53,29 @@ def adjust_product_stock(
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
+    variants = (
+        db.query(ProductVariant)
+        .filter(ProductVariant.product_id == product.id, ProductVariant.user_id == current_user.id)
+        .order_by(ProductVariant.id)
+        .with_for_update()
+        .all()
+    )
+    if payload.variant_id is None:
+        if len(variants) != 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Choose a product variant to adjust",
+            )
+        variant = variants[0]
+    else:
+        variant = next((item for item in variants if item.id == payload.variant_id), None)
+        if variant is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant not found")
+
     move_stock(
         db,
         product,
+        variant,
         available_delta=payload.quantity_delta,
         kind="manual_adjustment",
         reason=payload.reason,

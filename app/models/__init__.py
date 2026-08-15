@@ -14,6 +14,7 @@ from app.models.login_attempt import LoginAttempt
 from app.models.inventory_movement import InventoryMovement
 from app.models.product_image import ProductImage
 from app.models.payment_qr import PaymentQr
+from app.models.product_variant import ProductVariant
 
 __all__ = [
     "User",
@@ -32,4 +33,5 @@ __all__ = [
     "InventoryMovement",
     "ProductImage",
     "PaymentQr",
+    "ProductVariant",
 ]

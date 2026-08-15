@@ -10,6 +10,8 @@ from app.core.clock import utcnow
 from app.models.inventory_movement import InventoryMovement
 from app.models.order import UNPAID, Order
 from app.models.product import Product
+from app.models.product_variant import ProductVariant
+from app.services.variants import sync_product_totals, variant_label
 
 RESERVING_STATUSES = {"pending", "confirmed", "processing"}
 FULFILLED_STATUSES = {"shipped", "delivered"}
@@ -23,6 +25,7 @@ def reservation_deadline():
 def move_stock(
     db: Session,
     product: Product,
+    variant: ProductVariant,
     *,
     available_delta: int,
     reserved_delta: int = 0,
@@ -32,25 +35,33 @@ def move_stock(
     actor_user_id: UUID | None = None,
 ) -> InventoryMovement:
     """Apply one locked stock mutation and append its immutable audit entry."""
-    new_available = product.stock + available_delta
-    new_reserved = product.reserved_stock + reserved_delta
+    new_available = variant.stock + available_delta
+    new_reserved = variant.reserved_stock + reserved_delta
     if new_available < 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Insufficient stock for '{product.name}' (available: {product.stock})",
+            detail=(
+                f"Insufficient stock for '{product.name} — {variant_label(variant)}' "
+                f"(available: {variant.stock})"
+            ),
         )
     if new_reserved < 0:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Inventory reservation for '{product.name}' is inconsistent",
+            detail=f"Inventory reservation for '{product.name} — {variant_label(variant)}' is inconsistent",
         )
 
-    product.stock = new_available
-    product.reserved_stock = new_reserved
+    variant.stock = new_available
+    variant.reserved_stock = new_reserved
+    db.flush()
+    sync_product_totals(db, product)
     movement = InventoryMovement(
         user_id=product.user_id,
         product_id=product.id,
         product_name=product.name,
+        variant_id=variant.id,
+        variant_name=variant_label(variant),
+        variant_sku=variant.sku,
         order_id=order_id,
         created_by_user_id=actor_user_id,
         kind=kind,
@@ -63,17 +74,17 @@ def move_stock(
     return movement
 
 
-def lock_order_products(db: Session, order: Order) -> dict[UUID, Product]:
-    """Lock an order's products in stable order to avoid cross-order deadlocks."""
-    product_ids = sorted({item.product_id for item in order.items}, key=str)
-    products = (
-        db.query(Product)
-        .filter(Product.id.in_(product_ids))
-        .order_by(Product.id)
+def lock_order_variants(db: Session, order: Order) -> dict[UUID, ProductVariant]:
+    """Lock an order's variants in stable order to avoid cross-order deadlocks."""
+    variant_ids = sorted({item.variant_id for item in order.items}, key=str)
+    variants = (
+        db.query(ProductVariant)
+        .filter(ProductVariant.id.in_(variant_ids))
+        .order_by(ProductVariant.id)
         .with_for_update()
         .all()
     )
-    return {product.id: product for product in products}
+    return {variant.id: variant for variant in variants}
 
 
 def release_order_stock(
@@ -85,14 +96,15 @@ def release_order_stock(
 ) -> int:
     released = 0
     was_reserved = order.status in RESERVING_STATUSES
-    products = lock_order_products(db, order)
+    variants = lock_order_variants(db, order)
     for item in order.items:
-        product = products.get(item.product_id)
-        if product is None:
+        variant = variants.get(item.variant_id)
+        if variant is None:
             continue
         move_stock(
             db,
-            product,
+            variant.product,
+            variant,
             available_delta=item.quantity,
             reserved_delta=-item.quantity if was_reserved else 0,
             kind=kind,

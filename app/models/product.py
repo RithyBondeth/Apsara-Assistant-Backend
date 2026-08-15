@@ -42,3 +42,9 @@ class Product(Base):
         cascade="all, delete-orphan",
         order_by="ProductImage.position",
     )
+    variants = relationship(
+        "ProductVariant",
+        back_populates="product",
+        cascade="all, delete-orphan",
+        order_by="ProductVariant.created_at",
+    )

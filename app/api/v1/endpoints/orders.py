@@ -19,6 +19,7 @@ from app.models.order_item import OrderItem
 from app.models.message import Message
 from app.models.platform_connection import PlatformConnection
 from app.models.product import Product
+from app.models.product_variant import ProductVariant
 from app.models.user import User
 from app.schemas.message import AttachmentOut
 from app.schemas.order import CheckoutOut, OrderCreate, OrderOut, OrderUpdate
@@ -26,7 +27,7 @@ from app.services import stripe_gateway
 from app.services.inventory import (
     FULFILLED_STATUSES,
     RESERVING_STATUSES,
-    lock_order_products,
+    lock_order_variants,
     move_stock,
     release_expired_reservations,
     release_order_stock,
@@ -80,17 +81,18 @@ def _deduct_order(
     inventory, so re-activating has to take them out again or the order ships
     stock the seller never gave up.
     """
-    products = lock_order_products(db, order)
+    variants = lock_order_variants(db, order)
     for item in order.items:
-        product = products.get(item.product_id)
-        if product is None:
+        variant = variants.get(item.variant_id)
+        if variant is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot reopen this order: a product on it no longer exists",
+                detail="Cannot reopen this order: a variant on it no longer exists",
             )
         move_stock(
             db,
-            product,
+            variant.product,
+            variant,
             available_delta=-item.quantity,
             reserved_delta=item.quantity if reserve else 0,
             kind="reservation_reopened" if reserve else "order_reopened",
@@ -103,13 +105,14 @@ def _deduct_order(
 def _change_reserved_stock(
     db: Session, order: Order, *, delta_sign: int, kind: str, actor_user_id: UUID
 ) -> None:
-    products = lock_order_products(db, order)
+    variants = lock_order_variants(db, order)
     for item in order.items:
-        product = products.get(item.product_id)
-        if product is not None:
+        variant = variants.get(item.variant_id)
+        if variant is not None:
             move_stock(
                 db,
-                product,
+                variant.product,
+                variant,
                 available_delta=0,
                 reserved_delta=delta_sign * item.quantity,
                 kind=kind,
@@ -150,13 +153,11 @@ def create_order(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Order must contain at least one item"
         )
 
-    quantities: dict[UUID, int] = {}
     for item in payload.items:
         if item.quantity <= 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Item quantity must be positive"
             )
-        quantities[item.product_id] = quantities.get(item.product_id, 0) + item.quantity
 
     # Verify the customer belongs to the seller
     customer = db.query(Customer).filter(
@@ -190,7 +191,7 @@ def create_order(
     db.flush()
 
     total = 0
-    product_ids = sorted(quantities, key=str)
+    product_ids = sorted({item.product_id for item in payload.items}, key=str)
     locked_products = (
         db.query(Product)
         .filter(Product.id.in_(product_ids), Product.user_id == current_user.id)
@@ -199,30 +200,64 @@ def create_order(
         .all()
     )
     products_by_id = {product.id: product for product in locked_products}
+    locked_variants = (
+        db.query(ProductVariant)
+        .filter(
+            ProductVariant.product_id.in_(product_ids),
+            ProductVariant.user_id == current_user.id,
+        )
+        .order_by(ProductVariant.id)
+        .with_for_update()
+        .all()
+    )
+    variants_by_product: dict[UUID, list[ProductVariant]] = {}
+    variants_by_id = {variant.id: variant for variant in locked_variants}
+    for variant in locked_variants:
+        variants_by_product.setdefault(variant.product_id, []).append(variant)
 
-    for product_id in product_ids:
-        quantity = quantities[product_id]
-        # Locked for the transaction: checking stock and then decrementing it is
-        # a read-then-write. Stable lock order also prevents two multi-product
-        # orders from deadlocking when their lines arrive in opposite order.
-        product = products_by_id.get(product_id)
+    quantities: dict[UUID, int] = {}
+    for requested in payload.items:
+        product = products_by_id.get(requested.product_id)
         if not product:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Product {product_id} not found",
+                detail=f"Product {requested.product_id} not found",
             )
         if not product.is_active:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Product '{product.name}' is not available",
             )
-        # Use the product's server-side price as the source of truth
-        unit_price = product.price
+        active = [variant for variant in variants_by_product.get(product.id, []) if variant.is_active]
+        if requested.variant_id is None:
+            if len(active) != 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Choose a variant for '{product.name}'",
+                )
+            variant = active[0]
+        else:
+            variant = variants_by_id.get(requested.variant_id)
+            if variant is None or variant.product_id != product.id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant not found")
+            if not variant.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Variant '{variant.name}' is not available",
+                )
+        quantities[variant.id] = quantities.get(variant.id, 0) + requested.quantity
+
+    for variant_id in sorted(quantities, key=str):
+        quantity = quantities[variant_id]
+        variant = variants_by_id[variant_id]
+        product = products_by_id[variant.product_id]
+        unit_price = variant.price
         subtotal = unit_price * quantity
         total += subtotal
         move_stock(
             db,
             product,
+            variant,
             available_delta=-quantity,
             reserved_delta=quantity,
             kind="reservation_created",
@@ -233,6 +268,10 @@ def create_order(
         order.items.append(
             OrderItem(
                 product_id=product.id,
+                variant_id=variant.id,
+                variant_name=variant.name,
+                variant_sku=variant.sku,
+                variant_options=dict(variant.option_values),
                 quantity=quantity,
                 unit_price=unit_price,
                 subtotal=subtotal,
