@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.logging import configure as configure_logging
 from app.core.observability import configure as configure_error_tracking
 from app.database import SessionLocal
+from app.services.queue import drain
 
 configure_logging(settings.LOG_LEVEL, settings.LOG_FORMAT)
 configure_error_tracking()
@@ -46,6 +47,12 @@ async def request_context(request: Request, call_next):
     started = time.perf_counter()
 
     response = await call_next(request)
+
+    # Small installations deliberately run without a separate worker. Drain
+    # committed jobs here so stock alerts are still delivered automatically;
+    # production deployments use JOB_RUNNER=worker and skip this path.
+    if settings.JOB_RUNNER == "inline":
+        drain(limit=10)
 
     duration_ms = round((time.perf_counter() - started) * 1000, 1)
     response.headers["X-Request-ID"] = request_id

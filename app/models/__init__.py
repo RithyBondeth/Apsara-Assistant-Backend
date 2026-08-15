@@ -15,6 +15,7 @@ from app.models.inventory_movement import InventoryMovement
 from app.models.product_image import ProductImage
 from app.models.payment_qr import PaymentQr
 from app.models.product_variant import ProductVariant
+from app.models.operations import LowStockAlert, Supplier, PurchaseOrder, PurchaseOrderItem, SalesReturn, SalesReturnItem
 
 __all__ = [
     "User",
@@ -34,4 +35,5 @@ __all__ = [
     "ProductImage",
     "PaymentQr",
     "ProductVariant",
+    "LowStockAlert", "Supplier", "PurchaseOrder", "PurchaseOrderItem", "SalesReturn", "SalesReturnItem",
 ]
