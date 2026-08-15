@@ -49,6 +49,10 @@ class OrderOut(BaseModel):
     delivery_address: str | None
     notes: str | None
     payment_status: str
+    payment_method: str | None
+    payment_receipt_attachment_id: UUID | None
+    payment_confirmed_by_user_id: UUID | None
+    paid_at: datetime | None
     created_at: datetime
     updated_at: datetime
     items: list[OrderItemOut] = []

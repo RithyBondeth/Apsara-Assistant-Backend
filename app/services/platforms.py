@@ -8,7 +8,10 @@ send a reply back.
 import hashlib
 import hmac
 import logging
-from dataclasses import dataclass
+import mimetypes
+from dataclasses import dataclass, field
+from pathlib import PurePosixPath
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -25,6 +28,19 @@ TELEGRAM = "telegram"
 STRIPE = "stripe"
 
 SEND_TIMEOUT = 10.0
+MAX_ATTACHMENTS_PER_MESSAGE = 5
+SAFE_RECEIPT_TYPES = {"image/gif", "image/jpeg", "image/png", "image/webp"}
+
+
+@dataclass(frozen=True)
+class InboundAttachment:
+    """A platform attachment locator; never returned to the browser."""
+
+    source_url: str | None = None
+    platform_file_id: str | None = None
+    file_type: str | None = None
+    file_name: str | None = None
+    file_size: int | None = None
 
 
 @dataclass(frozen=True)
@@ -33,8 +49,16 @@ class InboundMessage:
 
     external_id: str
     sender_id: str
-    text: str
+    text: str | None = None
     sender_name: str | None = None
+    attachments: tuple[InboundAttachment, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class AttachmentDownload:
+    content: bytes
+    content_type: str
+    file_name: str | None
 
 
 # ── Authenticating the caller ────────────────────────────────────────────────
@@ -70,8 +94,8 @@ def parse_messenger_entry(entry: dict) -> tuple[str | None, list[InboundMessage]
     """Pull customer messages out of one webhook entry.
 
     Returns the page id alongside them, since that is what identifies the
-    seller. Everything that is not a customer's text is dropped: delivery and
-    read receipts, postbacks, attachments without a caption, and — most
+    seller. Everything that is not a customer's message is dropped: delivery
+    and read receipts, postbacks, and — most
     importantly — echoes, which are the page's own outgoing messages fed back.
     Treating an echo as input would have the assistant answer itself in a loop.
     """
@@ -84,13 +108,26 @@ def parse_messenger_entry(entry: dict) -> tuple[str | None, list[InboundMessage]
             continue
 
         text = message.get("text")
+        raw_attachments = message.get("attachments")
+        if not isinstance(raw_attachments, list):
+            raw_attachments = []
+        attachments = tuple(
+            InboundAttachment(
+                source_url=(item.get("payload") or {}).get("url"),
+                file_type=item.get("type"),
+            )
+            for item in raw_attachments[:MAX_ATTACHMENTS_PER_MESSAGE]
+            if isinstance(item, dict)
+            and isinstance((item.get("payload") or {}).get("url"), str)
+        )
         sender_id = (event.get("sender") or {}).get("id")
         external_id = message.get("mid")
-        if not (text and sender_id and external_id):
+        if not ((text or attachments) and sender_id and external_id):
             continue
 
         messages.append(
-            InboundMessage(external_id=external_id, sender_id=str(sender_id), text=text)
+            InboundMessage(external_id=external_id, sender_id=str(sender_id),
+                           text=text or None, attachments=attachments)
         )
 
     return page_id, messages
@@ -107,12 +144,30 @@ def parse_telegram_update(update: dict) -> InboundMessage | None:
     if not isinstance(message, dict):
         return None
 
-    text = message.get("text")
+    text = message.get("text") or message.get("caption")
     sender = message.get("from") or {}
     chat_id = (message.get("chat") or {}).get("id")
     update_id = update.get("update_id")
 
-    if not text or sender.get("is_bot") or chat_id is None or update_id is None:
+    attachments: list[InboundAttachment] = []
+    photos = message.get("photo")
+    if not isinstance(photos, list):
+        photos = []
+    if photos and isinstance(photos[-1], dict) and photos[-1].get("file_id"):
+        photo = photos[-1]
+        attachments.append(InboundAttachment(
+            platform_file_id=str(photo["file_id"]), file_type="image",
+            file_size=photo.get("file_size"), file_name=f"telegram-{update_id}.jpg",
+        ))
+    document = message.get("document")
+    if isinstance(document, dict) and document.get("file_id"):
+        attachments.append(InboundAttachment(
+            platform_file_id=str(document["file_id"]),
+            file_type=document.get("mime_type") or "file",
+            file_name=document.get("file_name"), file_size=document.get("file_size"),
+        ))
+
+    if (not text and not attachments) or sender.get("is_bot") or chat_id is None or update_id is None:
         return None
 
     name = " ".join(
@@ -122,9 +177,76 @@ def parse_telegram_update(update: dict) -> InboundMessage | None:
     return InboundMessage(
         external_id=str(update_id),
         sender_id=str(chat_id),
-        text=text,
+        text=text or None,
         sender_name=name or None,
+        attachments=tuple(attachments),
     )
+
+
+def _trusted_messenger_url(url: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    trusted_suffixes = ("facebook.com", "fbcdn.net", "fbsbx.com")
+    return parsed.scheme == "https" and any(
+        host == suffix or host.endswith(f".{suffix}") for suffix in trusted_suffixes
+    )
+
+
+def _bounded_download(url: str, *, headers: dict[str, str] | None = None) -> tuple[bytes, str | None]:
+    chunks: list[bytes] = []
+    size = 0
+    with httpx.stream("GET", url, headers=headers, timeout=SEND_TIMEOUT,
+                      follow_redirects=False) as response:
+        response.raise_for_status()
+        declared = response.headers.get("content-length")
+        if declared and int(declared) > settings.MAX_ATTACHMENT_BYTES:
+            raise ValueError("Attachment exceeds the configured size limit")
+        for chunk in response.iter_bytes():
+            size += len(chunk)
+            if size > settings.MAX_ATTACHMENT_BYTES:
+                raise ValueError("Attachment exceeds the configured size limit")
+            chunks.append(chunk)
+        return b"".join(chunks), response.headers.get("content-type")
+
+
+def download_attachment(platform: str, encrypted_token: str,
+                        attachment: InboundAttachment) -> AttachmentDownload:
+    """Copy one authenticated platform attachment into private storage."""
+    if attachment.file_size and attachment.file_size > settings.MAX_ATTACHMENT_BYTES:
+        raise ValueError("Attachment exceeds the configured size limit")
+
+    file_name = attachment.file_name
+    if platform == MESSENGER:
+        if not attachment.source_url or not _trusted_messenger_url(attachment.source_url):
+            raise ValueError("Messenger attachment URL is not on a trusted Meta host")
+        content, response_type = _bounded_download(attachment.source_url)
+    elif platform == TELEGRAM:
+        if not attachment.platform_file_id:
+            raise ValueError("Telegram attachment has no file id")
+        token = decrypt(encrypted_token)
+        metadata = httpx.get(
+            f"https://api.telegram.org/bot{token}/getFile",
+            params={"file_id": attachment.platform_file_id}, timeout=SEND_TIMEOUT,
+        )
+        metadata.raise_for_status()
+        body = metadata.json()
+        file_path = (body.get("result") or {}).get("file_path") if body.get("ok") else None
+        if not file_path or ".." in PurePosixPath(file_path).parts:
+            raise ValueError("Telegram did not return a valid file path")
+        file_name = file_name or PurePosixPath(file_path).name
+        content, response_type = _bounded_download(
+            f"https://api.telegram.org/file/bot{token}/{quote(file_path, safe='/')}"
+        )
+    else:
+        raise ValueError(f"Unsupported attachment platform {platform!r}")
+
+    content_type = (response_type or attachment.file_type or
+                    mimetypes.guess_type(file_name or "")[0] or "application/octet-stream")
+    content_type = content_type.partition(";")[0].strip()
+    if content_type not in SAFE_RECEIPT_TYPES:
+        raise ValueError("Only safe raster image attachments are supported")
+    return AttachmentDownload(content=content, content_type=content_type,
+                              file_name=file_name)
 
 
 # ── Checking a connection actually works ─────────────────────────────────────

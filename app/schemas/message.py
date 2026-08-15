@@ -8,10 +8,13 @@ from pydantic import BaseModel, Field
 
 class AttachmentOut(BaseModel):
     id: UUID
-    file_url: str
+    file_url: str | None
     file_type: str | None
     file_name: str | None
     file_size: int | None
+    review_status: str | None
+    reviewed_at: datetime | None
+    reviewed_by_user_id: UUID | None
 
     model_config = {"from_attributes": True}
 
