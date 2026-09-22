@@ -27,6 +27,9 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+    # Reads customer receipt screenshots. Any vision-capable model; the
+    # default is the cheapest that reads Khmer bank apps reliably.
+    OPENAI_VISION_MODEL: str = "gpt-4o-mini"
 
     # Where the web app is reachable — used to build password reset links.
     APP_BASE_URL: str = "http://localhost:3000"
@@ -70,6 +73,9 @@ class Settings(BaseSettings):
     # Seller-triggered draft generations have their own budget so using the
     # back office cannot consume the allowance reserved for customer replies.
     AI_DAILY_DRAFT_LIMIT: int = 100
+    # Receipt scans per seller per day. Customers send the photos, so this is
+    # the only thing between a prank and a vision bill. 0 disables scanning.
+    AI_DAILY_RECEIPT_LIMIT: int = 200
 
     # Customer-supplied images are persisted so expiring platform URLs do not
     # destroy payment evidence. Bound each download before it reaches storage.

@@ -21,9 +21,10 @@ from app.models.platform_connection import PlatformConnection
 from app.models.product import Product
 from app.models.product_variant import ProductVariant
 from app.models.user import User
-from app.schemas.message import AttachmentOut
+from app.schemas.message import AttachmentOut, ReceiptOut
 from app.schemas.order import CheckoutOut, OrderCreate, OrderOut, OrderUpdate
 from app.services import stripe_gateway
+from app.services import receipts
 from app.services.inventory import (
     FULFILLED_STATUSES,
     RESERVING_STATUSES,
@@ -426,7 +427,17 @@ def create_checkout(
                        payment_status=order.payment_status)
 
 
-@router.get("/{order_id}/receipts", response_model=list[AttachmentOut])
+def _with_verdict(db: Session, receipt: Attachment, order: Order) -> ReceiptOut:
+    """The attachment plus how its reading compares with this order."""
+    assessment = receipts.assess(db, receipt, order)
+    out = ReceiptOut.model_validate(receipt)
+    out.verdict = assessment.verdict
+    out.read = assessment.read
+    out.duplicate_of_order_id = assessment.duplicate_of_order_id
+    return out
+
+
+@router.get("/{order_id}/receipts", response_model=list[ReceiptOut])
 def list_order_receipts(
     order_id: UUID,
     db: Session = Depends(get_db),
@@ -435,7 +446,7 @@ def list_order_receipts(
     order = _owned_order(db, order_id, current_user.id)
     if order.conversation_id is None:
         return []
-    return (
+    rows = (
         db.query(Attachment)
         .join(Message, Message.id == Attachment.message_id)
         .filter(
@@ -446,6 +457,29 @@ def list_order_receipts(
         .order_by(Attachment.created_at.desc())
         .all()
     )
+    return [_with_verdict(db, receipt, order) for receipt in rows]
+
+
+@router.post("/{order_id}/receipts/{attachment_id}/scan", response_model=ReceiptOut)
+def scan_order_receipt(
+    order_id: UUID,
+    attachment_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Read (or re-read) a receipt now, and say how it compares with the order.
+
+    Synchronous on purpose: the seller is looking at the receipt and wants the
+    verdict before deciding. Receipts arriving from a channel are read by the
+    queue instead, before the seller is even alerted.
+    """
+    order = _owned_order(db, order_id, current_user.id)
+    receipt = _receipt_for_order(db, order, attachment_id)
+    receipt.ocr_status = None
+    receipts.scan(db, receipt, current_user.id)
+    db.commit()
+    db.refresh(receipt)
+    return _with_verdict(db, receipt, order)
 
 
 @router.post("/{order_id}/receipts/{attachment_id}/confirm", response_model=OrderOut)

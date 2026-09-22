@@ -228,8 +228,11 @@ def test_a_receipt_for_an_unpaid_order_is_a_payment_alert(client, seller, db):
     update = wh.telegram_update(555, "", update_id=2)
     del update["message"]["text"]
     update["message"]["photo"] = [{"file_id": "big", "file_size": 5}]
+    # The receipt is read before the seller is told (see test_receipt_ocr);
+    # here the model is simply unavailable, and the alert still goes out.
     with mock.patch("app.services.inbound.download_attachment", return_value=photo), \
-            wh.sends(), alerts() as to_seller:
+            wh.sends(), alerts() as to_seller, \
+            ai.fails(APIConnectionError(request=mock.Mock())):
         wh.post_telegram(client, integration["id"], update, secret=integration["webhook_secret"])
 
     [alert] = to_seller

@@ -69,6 +69,27 @@ def spend_draft(db: Session, user_id) -> bool:
     return True
 
 
+def spend_receipt(db: Session, user_id) -> bool:
+    """Count one receipt scan. Its own budget: a customer decides how many
+    photos arrive, and none of them should eat into the replies."""
+    statement = (
+        insert(AiUsage)
+        .values(user_id=user_id, day=utctoday(), count=0, receipt_count=1)
+        .on_conflict_do_update(
+            constraint="uq_ai_usage_user_day",
+            set_={"receipt_count": AiUsage.receipt_count + 1},
+        )
+        .returning(AiUsage.receipt_count)
+    )
+    used = db.execute(statement).scalar_one()
+    db.commit()
+    if used > settings.AI_DAILY_RECEIPT_LIMIT:
+        logger.warning("Seller %s is over the daily receipt scan limit (%s)",
+                       user_id, settings.AI_DAILY_RECEIPT_LIMIT)
+        return False
+    return True
+
+
 def used_today(db: Session, user_id) -> int:
     row = (
         db.query(AiUsage.count)

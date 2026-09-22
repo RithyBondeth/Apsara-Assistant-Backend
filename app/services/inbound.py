@@ -43,7 +43,8 @@ from app.services.platforms import (
 from app.services.queue import register
 from app.services.quota import spend_reply
 from app.services.payment_qrs import default_payment_qr_url
-from app.services.seller_alerts import alert_receipt, flag_attention
+from app.services.receipts import queue_scan
+from app.services.seller_alerts import flag_attention
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +245,8 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
         # whether the assistant also has a caption to answer.
         receipt_for = _order_awaiting_payment(db, conversation) if stored_attachments else None
         if receipt_for is not None:
-            alert_receipt(db, receipt_for, customer.name)
+            # Read the receipt first, then alert the seller with what it says.
+            queue_scan(db, receipt_for, [a.id for a in stored_attachments], customer.name)
             db.commit()
 
         # A receipt without a caption is evidence, not a prompt for the model.

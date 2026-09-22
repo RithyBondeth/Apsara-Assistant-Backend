@@ -24,4 +24,5 @@ class AiUsage(Base):
     day = Column(Date, nullable=False, default=utctoday)
     count = Column(Integer, nullable=False, server_default="0")
     draft_count = Column(Integer, nullable=False, server_default="0")
+    receipt_count = Column(Integer, nullable=False, server_default="0")
     created_at = Column(DateTime, default=utcnow)
