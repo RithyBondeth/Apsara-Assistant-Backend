@@ -5,13 +5,12 @@ from sqlalchemy.orm import Session
 from app.core.clock import utcnow
 from app.database import SessionLocal
 from app.models.operations import LowStockAlert
-from app.models.platform_connection import PlatformConnection
 from app.models.product import Product
 from app.models.product_variant import ProductVariant
 from app.models.user import User
 from app.services.email import send_email
-from app.services.platforms import TELEGRAM, send_reply
 from app.services.queue import enqueue, register
+from app.services.seller_alerts import send_telegram
 
 
 def evaluate_low_stock(db: Session, product: Product, variant: ProductVariant) -> LowStockAlert | None:
@@ -73,15 +72,9 @@ def deliver_low_stock(payload: dict) -> None:
                 alert.email_sent_at = utcnow()
             else:
                 failed.append("email")
-        if (user.low_stock_telegram_enabled and user.low_stock_telegram_chat_id
+        if (user.low_stock_telegram_enabled and user.telegram_chat_id
                 and not alert.telegram_sent_at):
-            connection = db.query(PlatformConnection).filter(
-                PlatformConnection.user_id == user.id,
-                PlatformConnection.platform == TELEGRAM,
-                PlatformConnection.is_active == True,
-            ).order_by(PlatformConnection.created_at).first()
-            if connection and send_reply(TELEGRAM, connection.access_token,
-                                         user.low_stock_telegram_chat_id, message):
+            if send_telegram(db, user, message):
                 alert.telegram_sent_at = utcnow()
             else:
                 failed.append("Telegram")

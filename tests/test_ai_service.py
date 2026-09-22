@@ -77,6 +77,35 @@ def test_language_rules_cover_all_three_scripts():
     assert "romanized Khmer out" in prompt
 
 
+# ── Shop information ─────────────────────────────────────────────────────────
+
+def test_shop_information_is_absent_until_the_seller_writes_some():
+    prompt = build_system_prompt(SELLER, [])
+    assert "Written by the seller" not in prompt
+    # Without it, the model is told not to guess at delivery or policy.
+    assert "do not guess" in prompt
+
+
+def test_shop_information_renders_only_the_parts_written():
+    seller = User(full_name="Sok Dara", business_name="Sok Silk Shop",
+                  delivery_info="Phnom Penh 1.50 USD, provinces 2.50 USD via J&T",
+                  shop_hours="   ")
+    prompt = build_system_prompt(seller, [])
+    assert "Written by the seller" in prompt
+    assert "Delivery:\nPhnom Penh 1.50 USD, provinces 2.50 USD via J&T" in prompt
+    # Whitespace-only is the same as unset: no empty heading for the model
+    # to fill in.
+    assert "Opening hours" not in prompt
+    assert "Location" not in prompt
+
+
+def test_shop_information_sits_between_catalogue_and_language_rules():
+    seller = User(full_name="Sok Dara", shop_address="St 271, Phnom Penh")
+    prompt = build_system_prompt(seller, [])
+    assert prompt.index("PRODUCT CATALOG") < prompt.index("Written by the seller") \
+        < prompt.index("LANGUAGE RULES")
+
+
 # ── The payment QR ───────────────────────────────────────────────────────────
 
 QR = "https://cdn.example/qr.png"

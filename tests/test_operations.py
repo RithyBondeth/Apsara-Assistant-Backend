@@ -93,13 +93,13 @@ def test_reports_show_best_sellers_and_reorder_forecast(client, seller):
 def test_low_stock_delivery_uses_email_and_connected_telegram(client, seller, db, monkeypatch):
     user = db.query(User).filter(User.email == seller.email).one()
     user.low_stock_telegram_enabled = True
-    user.low_stock_telegram_chat_id = "778899"
+    user.telegram_chat_id = "778899"
     db.add(PlatformConnection(user_id=user.id, platform="telegram", external_id="alert-bot",
                               access_token=encrypt("bot-token"), is_active=True))
     db.commit()
     sent = []
     monkeypatch.setattr("app.services.alerts.send_email", lambda to, subject, body: sent.append(("email", to, body)) or True)
-    monkeypatch.setattr("app.services.alerts.send_reply", lambda platform, token, chat, body: sent.append((platform, chat, body)) or True)
+    monkeypatch.setattr("app.services.seller_alerts.send_reply", lambda platform, token, chat, body: sent.append((platform, chat, body)) or True)
 
     seller.product(stock=1, low_stock_threshold=2)
 

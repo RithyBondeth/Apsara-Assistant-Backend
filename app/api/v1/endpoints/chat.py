@@ -25,6 +25,7 @@ from app.services.ai_service import (
     generate_ai_reply,
     generate_order_draft,
     payment_qr_message,
+    split_needs_seller,
     split_payment_qr,
 )
 from app.services.payment_qrs import default_payment_qr_url
@@ -229,6 +230,8 @@ def chat(
     # the message the customer would have received — this endpoint exists to
     # show the seller what their assistant does.
     reply_text, wants_qr = split_payment_qr(raw_reply)
+    # A rehearsal has no seller to wake: the marker is only stripped.
+    reply_text, _wants_seller = split_needs_seller(reply_text)
     ai_msg = Message(
         conversation_id=conversation_id,
         sender_type="assistant",

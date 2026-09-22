@@ -14,8 +14,10 @@ from app.schemas.auth import (
     OtpVerifyRequest,
     ResetPasswordRequest,
 )
-from app.schemas.user import Token, UserCreate, UserOut, UserUpdate
-from app.services import throttle, verification
+from app.models.platform_connection import PlatformConnection
+from app.schemas.user import TelegramLinkOut, Token, UserCreate, UserOut, UserUpdate
+from app.services import telegram_link, throttle, verification
+from app.services.platforms import TELEGRAM
 from app.services.email import send_login_otp, send_password_reset
 
 router = APIRouter()
@@ -93,6 +95,51 @@ def update_me(
 ):
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(current_user, field, value)
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+
+# ── Telegram alerts ──────────────────────────────────────────────────────────
+
+@router.post("/telegram-link", response_model=TelegramLinkOut)
+def start_telegram_link(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """A link the seller opens on their phone to receive alerts from their bot.
+
+    Needs a connected Telegram bot: the alerts are sent by it, and the link
+    starts a chat with it.
+    """
+    connection = (
+        db.query(PlatformConnection)
+        .filter(PlatformConnection.user_id == current_user.id,
+                PlatformConnection.platform == TELEGRAM,
+                PlatformConnection.is_active == True)
+        .order_by(PlatformConnection.created_at)
+        .first()
+    )
+    if connection is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Connect a Telegram bot under Integrations first")
+    code, url = telegram_link.issue(db, current_user, connection)
+    return TelegramLinkOut(
+        bot_username=url.split("t.me/")[1].split("?")[0],
+        link_url=url,
+        code=code,
+        expires_in_minutes=telegram_link.EXPIRE_MINUTES,
+    )
+
+
+@router.delete("/telegram-link", response_model=UserOut)
+def unlink_telegram(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    current_user.telegram_chat_id = None
+    current_user.telegram_chat_name = None
+    current_user.telegram_linked_at = None
     db.commit()
     db.refresh(current_user)
     return current_user

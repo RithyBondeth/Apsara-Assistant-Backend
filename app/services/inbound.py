@@ -17,6 +17,7 @@ from app.models.customer import Customer
 from app.models.attachment import Attachment
 from app.models.message import Message
 from app.models.platform_connection import PlatformConnection
+from app.models.order import PAID, Order
 from app.models.product import Product
 from app.models.user import User
 from app.services.ai_service import (
@@ -27,6 +28,7 @@ from app.services.ai_service import (
     build_system_prompt,
     generate_ai_reply,
     payment_qr_message,
+    split_needs_seller,
     split_payment_qr,
 )
 from app.services.platforms import (
@@ -41,6 +43,7 @@ from app.services.platforms import (
 from app.services.queue import register
 from app.services.quota import spend_reply
 from app.services.payment_qrs import default_payment_qr_url
+from app.services.seller_alerts import alert_receipt, flag_attention
 
 logger = logging.getLogger(__name__)
 
@@ -236,8 +239,24 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
                         connection.platform, message.external_id)
             return
 
+        # A photo while an order is awaiting payment is, almost always, the
+        # receipt. The seller is told straight away; nothing below depends on
+        # whether the assistant also has a caption to answer.
+        receipt_for = _order_awaiting_payment(db, conversation) if stored_attachments else None
+        if receipt_for is not None:
+            alert_receipt(db, receipt_for, customer.name)
+            db.commit()
+
         # A receipt without a caption is evidence, not a prompt for the model.
-        if conversation.handling_mode == "manual" or not connection.auto_reply or not message.text:
+        if conversation.handling_mode == "manual" or not connection.auto_reply:
+            # The receipt alert already said who and why; only a message with
+            # something more to say earns a second one.
+            if receipt_for is None or message.text:
+                _needs_seller(db, conversation, customer, "attention_manual", message.text)
+            return
+        if not message.text:
+            if stored_attachments and receipt_for is None:
+                _needs_seller(db, conversation, customer, "attention_photo", None)
             return
 
         # Charged before generating, not after: the cost is incurred by asking,
@@ -245,12 +264,14 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
         if not spend_reply(db, connection.user_id):
             logger.warning("Daily reply limit reached; %s message stored unanswered",
                            connection.platform)
+            _needs_seller(db, conversation, customer, "attention_unanswered", message.text)
             return
 
         generated = _generate(db, connection, conversation)
         if generated is None:
+            _needs_seller(db, conversation, customer, "attention_unanswered", message.text)
             return
-        reply, qr_url = generated
+        reply, qr_url, wants_seller = generated
 
         # Nothing below stores a message the platform refused: the customer
         # never saw it, so recording it would leave the seller reading a
@@ -264,6 +285,7 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
                              conversation.id)
                 # A payment QR arriving with no message explaining it is
                 # worse than nothing, so it does not follow a failed reply.
+                _needs_seller(db, conversation, customer, "attention_unanswered", message.text)
                 return
             db.add(Message(
                 conversation_id=conversation.id,
@@ -290,6 +312,11 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
             conversation.updated_at = now
             if conversation.first_response_at is None:
                 conversation.first_response_at = now
+            if wants_seller:
+                # The customer has been told the seller will get back to
+                # them; this is what makes that true.
+                flag_attention(db, conversation, "attention_escalated",
+                               customer.name, message.text)
             db.commit()
     except Exception:
         db.rollback()
@@ -298,12 +325,33 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
         db.close()
 
 
+def _needs_seller(db: Session, conversation: Conversation, customer: Customer,
+                  kind: str, text: str | None) -> None:
+    """Flag the thread for the seller and commit — the customer's message is
+    already stored, and this must survive whatever happens next."""
+    flag_attention(db, conversation, kind, customer.name, text)
+    db.commit()
+
+
+def _order_awaiting_payment(db: Session, conversation: Conversation) -> Order | None:
+    """The newest live order on this thread that has not been paid, if any."""
+    return (
+        db.query(Order)
+        .filter(Order.conversation_id == conversation.id,
+                Order.payment_status != PAID,
+                Order.status != "cancelled")
+        .order_by(Order.created_at.desc())
+        .first()
+    )
+
+
 def _generate(db: Session, connection: PlatformConnection,
-              conversation: Conversation) -> tuple[str, str | None] | None:
-    """The reply text and, when the assistant asked for it, the QR to attach.
+              conversation: Conversation) -> tuple[str, str | None, bool] | None:
+    """The reply text, the QR to attach if the assistant asked for one, and
+    whether it asked for the seller.
 
     `None` means no reply could be produced at all — distinct from a reply
-    that carries no QR.
+    that carries neither.
     """
     seller = db.query(User).filter(User.id == connection.user_id).first()
     if not seller:
@@ -336,6 +384,7 @@ def _generate(db: Session, connection: PlatformConnection,
         return None
 
     reply, wants_qr = split_payment_qr(raw)
+    reply, wants_seller = split_needs_seller(reply)
     # Guarded against the seller having cleared their QR since the prompt was
     # built, and against a model that emits the marker regardless.
-    return reply, default_payment_qr_url(seller) if wants_qr else None
+    return reply, default_payment_qr_url(seller) if wants_qr else None, wants_seller

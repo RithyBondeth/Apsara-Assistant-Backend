@@ -36,6 +36,11 @@ class Conversation(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     unread_count = Column(Integer, nullable=False, default=0, server_default="0")
+    # Set when a customer is waiting on a human — the assistant escalated,
+    # could not answer, or the thread is handled manually — and cleared when
+    # the seller replies. One alert per episode: it is only raised on the
+    # transition from unset.
+    needs_attention_at = Column(DateTime, index=True)
     last_read_at = Column(DateTime)
     first_customer_message_at = Column(DateTime)
     first_response_at = Column(DateTime)

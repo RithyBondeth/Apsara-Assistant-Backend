@@ -91,6 +91,8 @@ app/
                         quota           daily reply ceiling
                         throttle        sign-in rate limiting
                         verification    password-reset and OTP codes
+                        seller_alerts   Telegram alerts to the seller's own phone
+                        telegram_link   linking the seller's Telegram without a chat id
   models/             SQLAlchemy tables
   core/               config, security, crypto, clock, logging
 alembic/versions/     migrations
@@ -119,6 +121,24 @@ sellers must reconnect.
 `TIMESTAMP WITHOUT TIME ZONE` holding UTC; `utcnow()` matches that. Don't reach
 for `datetime.now(timezone.utc)` — comparing an aware value against these
 columns raises.
+
+**The assistant knows the shop, not just the catalogue.** `shop_address`,
+`shop_hours`, `delivery_info` and `shop_policies` on the seller are rendered
+into the system prompt as a SHOP INFORMATION section. Without them the model
+is told not to guess at delivery fees or policies — it says it will check with
+the seller, and ends the reply with `[NEEDS_SELLER]` so the seller is told.
+
+**The seller is alerted on their phone, once per episode.** When the assistant
+escalates, cannot answer, or a thread is in manual mode, the conversation's
+`needs_attention_at` is set and a `seller_alert` job is queued; a receipt
+photo on an unpaid order and a Stripe payment queue their own. Only the
+transition from unset raises an alert, and a seller reply (or closing the
+thread) clears it, so a customer sending five messages overnight is one
+notification. Delivery is through the seller's own Telegram bot to the chat
+recorded by the link flow (`POST /auth/telegram-link` → the seller opens
+`t.me/<bot>?start=<code>` → the webhook records the chat), in the language the
+seller uses in the web app. `attention_telegram_enabled` and
+`payment_telegram_enabled` are the two switches.
 
 **Webhooks prove who is calling.** They are the only unauthenticated endpoints:
 Messenger by an app-level signature over the raw body, Telegram by a
@@ -163,6 +183,7 @@ that bite:
 | `JOB_RUNNER` | `inline` or `worker`. With `worker`, something must actually run `python -m app.worker`, or queued replies are never sent. |
 | `AI_DAILY_REPLY_LIMIT` | Inbound volume is not ours to control; this is the ceiling on OpenAI spend per seller per day. |
 | `AI_DAILY_DRAFT_LIMIT` | Separate daily ceiling for seller-triggered AI order proposals. |
+| `APP_BASE_URL` | Seller alerts link straight into the inbox (`/chat?conversation=…`) and an order (`/orders?order=…`); a wrong value sends the seller to the wrong site. |
 
 ## Operational endpoints
 

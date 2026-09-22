@@ -57,6 +57,7 @@ class ConversationOut(BaseModel):
     handling_mode: str
     assigned_user_id: UUID | None
     unread_count: int
+    needs_attention_at: datetime | None = None
     last_read_at: datetime | None
     first_customer_message_at: datetime | None
     first_response_at: datetime | None
@@ -82,6 +83,7 @@ class InboxMetricsOut(BaseModel):
     pending: int
     closed: int
     unread: int
+    needs_attention: int = 0
     manual: int
     unassigned: int
     average_first_response_seconds: float | None
