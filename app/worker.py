@@ -17,6 +17,7 @@ from app.database import SessionLocal
 from app.services import inbound  # noqa: F401
 from app.services import alerts  # noqa: F401
 from app.services import seller_alerts  # noqa: F401
+from app.services import receipts  # noqa: F401
 from app.services import throttle
 from app.services.queue import prune_finished, release_stuck, run_once
 

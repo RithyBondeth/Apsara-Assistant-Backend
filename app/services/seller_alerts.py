@@ -69,10 +69,12 @@ TEMPLATES: dict[str, tuple[str, dict[str, str]]] = {
         "km": "📷 {customer} បានផ្ញើរូបភាព\n"
               "ជំនួយការមិនឆ្លើយតបរូបភាពទេ។ ឆ្លើយតបនៅទីនេះ៖ {url}",
     }),
+    # `reading` is the receipt verdict when one could be produced, already
+    # rendered in the seller's language with a leading newline; empty otherwise.
     "receipt_received": (PAYMENT, {
-        "en": "🧾 {customer} sent a payment receipt\nOrder {order} · {amount}\n"
+        "en": "🧾 {customer} sent a payment receipt\nOrder {order} · {amount}{reading}\n"
               "Check it and confirm the payment: {url}",
-        "km": "🧾 {customer} បានផ្ញើវិក្កយបត្របង់ប្រាក់\nការបញ្ជាទិញ {order} · {amount}\n"
+        "km": "🧾 {customer} បានផ្ញើវិក្កយបត្របង់ប្រាក់\nការបញ្ជាទិញ {order} · {amount}{reading}\n"
               "ពិនិត្យ និងបញ្ជាក់ការបង់ប្រាក់៖ {url}",
     }),
     "order_paid": (PAYMENT, {
@@ -193,11 +195,11 @@ def clear_attention(conversation: Conversation) -> None:
     conversation.needs_attention_at = None
 
 
-def alert_receipt(db: Session, order, customer_name: str) -> None:
+def alert_receipt(db: Session, order, customer_name: str, *, reading: str = "") -> None:
     alert(db, order.user_id, "receipt_received",
           customer=customer_name, order=short_order(order.id),
           amount=format_amount(order.total_amount, order.currency),
-          url=order_url(order.id))
+          reading=reading, url=order_url(order.id))
 
 
 def alert_paid(db: Session, order, customer_name: str) -> None:

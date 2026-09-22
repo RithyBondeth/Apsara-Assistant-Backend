@@ -92,6 +92,7 @@ app/
                         throttle        sign-in rate limiting
                         verification    password-reset and OTP codes
                         seller_alerts   Telegram alerts to the seller's own phone
+                        receipts        reading a customer's receipt, and judging it
                         telegram_link   linking the seller's Telegram without a chat id
   models/             SQLAlchemy tables
   core/               config, security, crypto, clock, logging
@@ -140,6 +141,17 @@ recorded by the link flow (`POST /auth/telegram-link` → the seller opens
 seller uses in the web app. `attention_telegram_enabled` and
 `payment_telegram_enabled` are the two switches.
 
+**Receipts are read before the seller is told.** A customer's photo on an
+unpaid order goes to a vision model (`OPENAI_VISION_MODEL`) that returns the
+amount, currency and transaction reference as strict JSON. `receipts.assess`
+turns that into one verdict against the order — `match`, `amount_mismatch`,
+`currency_differs`, `duplicate` (the same reference was already sent to this
+seller, for any order), `not_a_receipt`, `unreadable` — and the Telegram
+alert carries it. The reading is advice: confirming stays the seller's tap,
+and `POST /orders/{id}/receipts/{attachment_id}/scan` re-reads on demand.
+Scans have their own daily ceiling, `AI_DAILY_RECEIPT_LIMIT`, because the
+customer decides how many photos arrive.
+
 **Webhooks prove who is calling.** They are the only unauthenticated endpoints:
 Messenger by an app-level signature over the raw body, Telegram by a
 per-connection secret header, Stripe by its signature over the raw body. They
@@ -183,6 +195,7 @@ that bite:
 | `JOB_RUNNER` | `inline` or `worker`. With `worker`, something must actually run `python -m app.worker`, or queued replies are never sent. |
 | `AI_DAILY_REPLY_LIMIT` | Inbound volume is not ours to control; this is the ceiling on OpenAI spend per seller per day. |
 | `AI_DAILY_DRAFT_LIMIT` | Separate daily ceiling for seller-triggered AI order proposals. |
+| `AI_DAILY_RECEIPT_LIMIT` | Receipt scans per seller per day; 0 turns scanning off. Customers choose how many photos to send, so this is the only cap on vision spend. |
 | `APP_BASE_URL` | Seller alerts link straight into the inbox (`/chat?conversation=…`) and an order (`/orders?order=…`); a wrong value sends the seller to the wrong site. |
 
 ## Operational endpoints
