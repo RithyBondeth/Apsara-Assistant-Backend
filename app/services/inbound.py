@@ -33,6 +33,9 @@ from app.services.ai_service import (
 )
 from app.services.platforms import (
     MESSENGER,
+    SAFE_RECEIPT_TYPES,
+    TEXT,
+    VOICE,
     InboundMessage,
     InboundAttachment,
     download_attachment,
@@ -210,14 +213,20 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
                 logger.warning("Could not retain attachment from %s message %s: %s",
                                connection.platform, message.external_id, exc)
 
+        image_stored = any(a.file_type in SAFE_RECEIPT_TYPES for a in stored_attachments)
+        # The type says what arrived even when nothing could be kept: a voice
+        # note whose download failed is still a voice note the seller must
+        # know about, not a blank line.
+        message_type = ("image" if image_stored
+                        else message.kind if message.kind != TEXT else "text")
         inbound = Message(
             conversation_id=conversation.id,
             platform_connection_id=connection.id,
             sender_type="customer",
-            message_type="image" if stored_attachments else "text",
+            message_type=message_type,
             content=message.text or ("Attachment could not be downloaded."
-                                     if message.attachments and not stored_attachments
-                                     else None),
+                                     if message.kind == TEXT and message.attachments
+                                     and not stored_attachments else None),
             external_id=message.external_id,
         )
         inbound.attachments.extend(stored_attachments)
@@ -248,6 +257,16 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
             # Read the receipt first, then alert the seller with what it says.
             queue_scan(db, receipt_for, [a.id for a in stored_attachments], customer.name)
             db.commit()
+
+        # The assistant cannot hear or watch. Whatever else happens with this
+        # message, the seller is the only one who can answer it.
+        if message.kind == VOICE:
+            _needs_seller(db, conversation, customer, "attention_voice", message.text)
+            if not message.text:
+                return
+        elif message.kind != TEXT and not message.text:
+            _needs_seller(db, conversation, customer, "attention_unsupported", None)
+            return
 
         # A receipt without a caption is evidence, not a prompt for the model.
         if conversation.handling_mode == "manual" or not connection.auto_reply:

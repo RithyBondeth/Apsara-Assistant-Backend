@@ -43,6 +43,7 @@ def _attach_message_previews(db: Session, conversations: list[Conversation]) -> 
             Message.conversation_id.label("conversation_id"),
             Message.content.label("content"),
             Message.sender_type.label("sender_type"),
+            Message.message_type.label("message_type"),
             func.row_number().over(
                 partition_by=Message.conversation_id,
                 order_by=(Message.created_at.desc(), Message.id.desc()),
@@ -57,6 +58,7 @@ def _attach_message_previews(db: Session, conversations: list[Conversation]) -> 
         message = by_conversation.get(conversation.id)
         conversation.last_message_preview = message.content[:120] if message and message.content else None
         conversation.last_message_sender = message.sender_type if message else None
+        conversation.last_message_type = message.message_type if message else None
 
 
 # ── Conversations ─────────────────────────────────────────────────────────────

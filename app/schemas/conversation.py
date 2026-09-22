@@ -65,6 +65,7 @@ class ConversationOut(BaseModel):
     last_seller_message_at: datetime | None
     last_message_preview: str | None = None
     last_message_sender: str | None = None
+    last_message_type: str | None = None
     created_at: datetime
     updated_at: datetime
     tags: list[ConversationTagOut] = []

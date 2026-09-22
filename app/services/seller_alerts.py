@@ -63,6 +63,18 @@ TEMPLATES: dict[str, tuple[str, dict[str, str]]] = {
         "km": "💬 សារថ្មីពី {customer}\n«{preview}»\n"
               "ការសន្ទនានេះអ្នកជាអ្នកឆ្លើយផ្ទាល់។ ឆ្លើយតបនៅទីនេះ៖ {url}",
     }),
+    "attention_voice": (ATTENTION, {
+        "en": "🎤 {customer} sent a voice message\n"
+              "The assistant cannot listen to it. Reply here: {url}",
+        "km": "🎤 {customer} បានផ្ញើសារជាសំឡេង\n"
+              "ជំនួយការមិនអាចស្តាប់បានទេ។ ឆ្លើយតបនៅទីនេះ៖ {url}",
+    }),
+    "attention_unsupported": (ATTENTION, {
+        "en": "📎 {customer} sent a video, sticker or file\n"
+              "The assistant cannot read it. Reply here: {url}",
+        "km": "📎 {customer} បានផ្ញើវីដេអូ ស្ទីកឃ័រ ឬឯកសារ\n"
+              "ជំនួយការមិនអាចអានបានទេ។ ឆ្លើយតបនៅទីនេះ៖ {url}",
+    }),
     "attention_photo": (ATTENTION, {
         "en": "📷 {customer} sent a photo\n"
               "The assistant does not answer photos. Reply here: {url}",
