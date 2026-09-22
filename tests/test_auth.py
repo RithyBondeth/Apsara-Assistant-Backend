@@ -48,6 +48,29 @@ def test_register_then_sign_in(client):
     assert me.json()["email"] == seller.email
 
 
+def test_shop_information_is_saved_and_blank_clears_it(client, seller):
+    r = client.patch("/api/v1/auth/me", headers=seller.headers, json={
+        "delivery_info": "  Phnom Penh 1.50 USD  ",
+        "shop_hours": "8am-8pm",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["delivery_info"] == "Phnom Penh 1.50 USD"
+    assert r.json()["shop_hours"] == "8am-8pm"
+    assert r.json()["shop_address"] is None
+
+    # An emptied textarea is a cleared field, and untouched fields stay.
+    r = client.patch("/api/v1/auth/me", headers=seller.headers,
+                     json={"shop_hours": "   "})
+    assert r.json()["shop_hours"] is None
+    assert r.json()["delivery_info"] == "Phnom Penh 1.50 USD"
+
+
+def test_shop_information_is_bounded(client, seller):
+    r = client.patch("/api/v1/auth/me", headers=seller.headers,
+                     json={"shop_policies": "x" * 2001})
+    assert r.status_code == 422
+
+
 def test_browser_session_uses_an_httponly_cookie(client):
     seller = register(client)
     login_response = login(client, seller.email, PASSWORD)

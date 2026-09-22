@@ -313,6 +313,23 @@ def check_credentials(platform: str, encrypted_token: str) -> CheckResult:
         return CheckResult(False, "The check failed unexpectedly.")
 
 
+def telegram_bot_username(encrypted_token: str) -> str | None:
+    """The bot's @username, as Telegram knows it — a t.me link needs the real
+    one, not whatever the seller typed as the bot id. None when Telegram
+    cannot be asked."""
+    try:
+        token = decrypt(encrypted_token)
+        response = httpx.get(f"https://api.telegram.org/bot{token}/getMe",
+                             timeout=SEND_TIMEOUT)
+        body = response.json()
+        if response.status_code >= 400 or not body.get("ok"):
+            return None
+        return body.get("result", {}).get("username") or None
+    except Exception:
+        logger.warning("Could not look up the Telegram bot's username", exc_info=True)
+        return None
+
+
 def register_telegram_webhook(encrypted_token: str, url: str, secret: str) -> CheckResult:
     """Point a bot at our webhook, so the seller never has to call setWebhook.
 

@@ -28,6 +28,7 @@ from app.schemas.conversation import (
 )
 from app.schemas.message import MessageCreate, MessageOut
 from app.services.platforms import send_reply
+from app.services.seller_alerts import clear_attention
 
 router = APIRouter()
 
@@ -68,6 +69,7 @@ def list_conversations(
     platform: str | None = Query(default=None),
     customer_id: UUID | None = Query(default=None),
     unread_only: bool = Query(default=False),
+    needs_attention: bool = Query(default=False),
     handling_mode: str | None = Query(default=None),
     assignment: str | None = Query(default=None),
     tag: str | None = Query(default=None),
@@ -88,6 +90,8 @@ def list_conversations(
         query = query.filter(Conversation.customer_id == customer_id)
     if unread_only:
         query = query.filter(Conversation.unread_count > 0)
+    if needs_attention:
+        query = query.filter(Conversation.needs_attention_at.isnot(None))
     if handling_mode:
         if handling_mode not in {"auto", "manual"}:
             raise HTTPException(status_code=422, detail="handling_mode must be auto or manual")
@@ -126,6 +130,9 @@ def inbox_metrics(
             func.count(Conversation.id).filter(Conversation.status == "closed").label("closed"),
             func.coalesce(func.sum(Conversation.unread_count), 0).label("unread"),
             func.count(Conversation.id).filter(
+                Conversation.needs_attention_at.isnot(None)
+            ).label("needs_attention"),
+            func.count(Conversation.id).filter(
                 Conversation.handling_mode == "manual"
             ).label("manual"),
             func.count(Conversation.id).filter(
@@ -150,6 +157,7 @@ def inbox_metrics(
         pending=metrics.pending,
         closed=metrics.closed,
         unread=metrics.unread,
+        needs_attention=metrics.needs_attention,
         manual=metrics.manual,
         unassigned=metrics.unassigned,
         average_first_response_seconds=(
@@ -248,6 +256,8 @@ def update_conversation(
         conversation.assigned_user_id = current_user.id
     elif changes.get("handling_mode") == "auto" and "assigned_user_id" not in changes:
         conversation.assigned_user_id = None
+    if changes.get("status") == "closed":
+        clear_attention(conversation)
     db.commit()
     db.refresh(conversation)
     _attach_message_previews(db, [conversation])
@@ -487,6 +497,9 @@ def send_message(
         conversation.first_response_at = now
     conversation.handling_mode = "manual"
     conversation.assigned_user_id = current_user.id
+    # The seller has answered; the next time the customer needs them is a new
+    # episode, and alerts again.
+    clear_attention(conversation)
     db.commit()
     db.refresh(message)
     return message

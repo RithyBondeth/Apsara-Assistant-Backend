@@ -41,6 +41,11 @@ URLs shown in the app are built from it.
 from your Telegram profile, and — if `OPENAI_API_KEY` is set and the connection
 has auto-reply on — the assistant answers in the same language you wrote in.
 
+6. Back in the app, **Settings → Telegram alerts → Link Telegram**, and open
+   the link on your phone. Press **Start**; the bot replies that it is linked
+   and the page updates by itself. From now on the assistant's escalations,
+   customer receipts and card payments reach you here.
+
 If nothing arrives, ask Telegram what it thinks:
 
 ```bash

@@ -19,9 +19,11 @@ from sqlalchemy.orm import Session
 from app.core.clock import utcnow
 from app.core.config import settings
 from app.database import get_db
+from app.models.customer import Customer
 from app.models.order import PAID, Order
 from app.models.platform_connection import PlatformConnection
-from app.services import platforms, stripe_gateway
+from app.services import platforms, stripe_gateway, telegram_link
+from app.services.seller_alerts import alert_paid
 from app.services.inbound import INBOUND_MESSAGE
 from app.services.queue import drain, enqueue
 
@@ -130,6 +132,9 @@ async def receive_telegram_update(
         raise HTTPException(status_code=403, detail="Invalid webhook credentials")
 
     message = platforms.parse_telegram_update(await request.json())
+    if message and telegram_link.claim(db, connection, message):
+        # The seller opening the link from Settings, not a customer.
+        return ACK
     if message:
         _queue(db, background, connection.id, message)
 
@@ -203,9 +208,13 @@ async def receive_stripe_event(
         # Paid stock must never be released by reservation expiry even if the
         # seller has not yet moved the order from pending to confirmed.
         order.reservation_expires_at = None
+        customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
+        alert_paid(db, order, customer.name if customer else "")
         db.commit()
         logger.info("Order %s marked paid from Stripe session %s",
                     order.id, session.get("id"))
+        if settings.JOB_RUNNER == "inline":
+            drain(5)
 
     return ACK
 

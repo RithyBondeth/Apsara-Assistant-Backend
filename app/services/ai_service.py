@@ -38,6 +38,11 @@ ROLE_BY_SENDER = {"customer": "user", "assistant": "assistant", "seller": "assis
 # customer could type, so a quoted message can never trigger a send.
 PAYMENT_QR_MARKER = "[SEND_PAYMENT_QR]"
 
+# How the model says a human is needed. Same shape and same reasoning as the
+# QR marker: one round trip, and nothing a customer could type by accident.
+# The seller gets a Telegram alert; the customer only ever sees the apology.
+NEEDS_SELLER_MARKER = "[NEEDS_SELLER]"
+
 
 class AIError(RuntimeError):
     """Raised when a reply could not be generated."""
@@ -124,6 +129,8 @@ def build_system_prompt(user: User, products: list[Product]) -> str:
 
     product_catalog = "\n\n".join(product_lines) or "No products are listed yet."
 
+    shop_section = build_shop_section(user)
+
     # Only described when there is one to send. A seller who has not set a QR
     # up should never have the assistant promise a payment code that will not
     # arrive — so for them the rules simply do not exist.
@@ -159,7 +166,7 @@ Your role:
 PRODUCT CATALOG
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {product_catalog}
-
+{shop_section}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 LANGUAGE RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -189,7 +196,53 @@ BEHAVIOR RULES
 - You cannot confirm an order yourself. When a customer wants to buy, collect
   their name, phone number and delivery address, then say the seller will
   confirm shortly
-- If you cannot answer, politely say you will check with the seller
+- Answer delivery, location, opening-hours and policy questions only from
+  the SHOP INFORMATION section. If it does not cover the question, or there
+  is no such section, do not guess: politely say you will check with the
+  seller
+- Whenever you tell the customer you will check with the seller — because
+  the question is not covered, or they want something only the seller can
+  decide (a discount, a custom order, a complaint) — end your reply with
+  {NEEDS_SELLER_MARKER} on its own line so the seller is notified. Never
+  mention or describe the marker to the customer
+"""
+
+
+# ── Shop information ──────────────────────────────────────────────────────────
+
+# (attribute, heading) in the order they are rendered. Delivery first: it is
+# the question most often asked before a Cambodian customer commits.
+SHOP_FIELDS = (
+    ("delivery_info", "Delivery"),
+    ("shop_address", "Location"),
+    ("shop_hours", "Opening hours"),
+    ("shop_policies", "Policies"),
+)
+
+
+def build_shop_section(user: User) -> str:
+    """The seller's own answers to the questions that are not about a product.
+
+    Rendered only when the seller has written something, and only the parts
+    they have written: a heading with nothing under it invites the model to
+    fill it in.
+    """
+    parts = [
+        f"{heading}:\n{value.strip()}"
+        for attribute, heading in SHOP_FIELDS
+        if (value := getattr(user, attribute, None)) and value.strip()
+    ]
+    if not parts:
+        return ""
+    body = "\n\n".join(parts)
+    return f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SHOP INFORMATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Written by the seller. Use it to answer questions about delivery, fees,
+location, hours, returns and exchanges. Quote fees exactly as written.
+
+{body}
 """
 
 
@@ -206,9 +259,19 @@ def split_payment_qr(reply: str) -> tuple[str, bool]:
     A reply that is *only* the marker leaves empty text — the caller decides
     what to do with that rather than having a sentence invented here.
     """
-    if PAYMENT_QR_MARKER not in reply:
+    return _split_marker(reply, PAYMENT_QR_MARKER)
+
+
+def split_needs_seller(reply: str) -> tuple[str, bool]:
+    """Separate the reply from the model's request for a human. Same contract
+    as `split_payment_qr`."""
+    return _split_marker(reply, NEEDS_SELLER_MARKER)
+
+
+def _split_marker(reply: str, marker: str) -> tuple[str, bool]:
+    if marker not in reply:
         return reply, False
-    return reply.replace(PAYMENT_QR_MARKER, "").strip(), True
+    return reply.replace(marker, "").strip(), True
 
 
 def payment_qr_message(conversation_id, image_url: str) -> Message:
