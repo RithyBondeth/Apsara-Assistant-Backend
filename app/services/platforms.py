@@ -30,6 +30,20 @@ STRIPE = "stripe"
 SEND_TIMEOUT = 10.0
 MAX_ATTACHMENTS_PER_MESSAGE = 5
 SAFE_RECEIPT_TYPES = {"image/gif", "image/jpeg", "image/png", "image/webp"}
+# Voice notes. Telegram sends OGG/Opus; Messenger sends MP4/AAC or MP3. Kept
+# so the seller can play what the assistant cannot listen to.
+SAFE_AUDIO_TYPES = {"audio/ogg", "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/opus"}
+SAFE_ATTACHMENT_TYPES = SAFE_RECEIPT_TYPES | SAFE_AUDIO_TYPES
+
+# What a message is, when it is not text. The assistant answers text and
+# ignores the rest, but the rest must still reach the seller: a voice note
+# that vanished used to look, to the customer, like being ignored.
+TEXT = "text"
+VOICE = "voice"
+VIDEO = "video"
+STICKER = "sticker"
+FILE = "file"
+OTHER = "other"
 
 
 @dataclass(frozen=True)
@@ -52,6 +66,9 @@ class InboundMessage:
     text: str | None = None
     sender_name: str | None = None
     attachments: tuple[InboundAttachment, ...] = field(default_factory=tuple)
+    # TEXT, VOICE, VIDEO, STICKER, FILE or OTHER. A photo is TEXT with an
+    # image attachment; only things the assistant cannot read get a kind.
+    kind: str = TEXT
 
 
 @dataclass(frozen=True)
@@ -111,23 +128,31 @@ def parse_messenger_entry(entry: dict) -> tuple[str | None, list[InboundMessage]
         raw_attachments = message.get("attachments")
         if not isinstance(raw_attachments, list):
             raw_attachments = []
+        raw_attachments = [item for item in raw_attachments if isinstance(item, dict)]
+        types = {item.get("type") for item in raw_attachments}
+        # Images and audio are fetched; video is not (size), and a sticker
+        # or a shared file is only noted. The kind says what arrived.
         attachments = tuple(
             InboundAttachment(
                 source_url=(item.get("payload") or {}).get("url"),
                 file_type=item.get("type"),
             )
             for item in raw_attachments[:MAX_ATTACHMENTS_PER_MESSAGE]
-            if isinstance(item, dict)
+            if item.get("type") in ("image", "audio")
             and isinstance((item.get("payload") or {}).get("url"), str)
         )
+        kind = (VOICE if "audio" in types else VIDEO if "video" in types
+                else FILE if "file" in types else OTHER if types - {"image"} else TEXT)
+        if message.get("sticker_id") and not text:
+            kind = STICKER
         sender_id = (event.get("sender") or {}).get("id")
         external_id = message.get("mid")
-        if not ((text or attachments) and sender_id and external_id):
+        if not ((text or attachments or kind != TEXT) and sender_id and external_id):
             continue
 
         messages.append(
             InboundMessage(external_id=external_id, sender_id=str(sender_id),
-                           text=text or None, attachments=attachments)
+                           text=text or None, attachments=attachments, kind=kind)
         )
 
     return page_id, messages
@@ -167,7 +192,40 @@ def parse_telegram_update(update: dict) -> InboundMessage | None:
             file_name=document.get("file_name"), file_size=document.get("file_size"),
         ))
 
-    if (not text and not attachments) or sender.get("is_bot") or chat_id is None or update_id is None:
+    kind = TEXT
+    voice = message.get("voice") or message.get("audio")
+    if isinstance(voice, dict) and voice.get("file_id"):
+        kind = VOICE
+        attachments.append(InboundAttachment(
+            platform_file_id=str(voice["file_id"]),
+            file_type=voice.get("mime_type") or "audio/ogg",
+            file_size=voice.get("file_size"), file_name=f"telegram-{update_id}.ogg",
+        ))
+    elif message.get("video") or message.get("video_note") or message.get("animation"):
+        kind = VIDEO
+    elif message.get("sticker"):
+        kind = STICKER
+    elif isinstance(document, dict) and document.get("file_id") and not photos:
+        kind = FILE
+    elif isinstance(message.get("location"), dict):
+        # A pin is the customer telling us where to deliver — worth more to
+        # the assistant as text than as a mystery attachment.
+        location = message["location"]
+        lat, lon = location.get("latitude"), location.get("longitude")
+        if lat is not None and lon is not None:
+            text = f"📍 https://maps.google.com/?q={lat},{lon}" + (f"\n{text}" if text else "")
+    elif isinstance(message.get("contact"), dict):
+        contact = message["contact"]
+        parts = [contact.get("first_name"), contact.get("last_name"), contact.get("phone_number")]
+        text = "📞 " + " ".join(p for p in parts if p) + (f"\n{text}" if text else "")
+    elif not text and not attachments:
+        # Polls, dice, games, service messages: real messages the customer
+        # sent, that no one can answer for them.
+        kind = OTHER if any(k not in ("message_id", "from", "chat", "date", "entities")
+                            for k in message) else TEXT
+
+    if (not text and not attachments and kind == TEXT) or sender.get("is_bot") \
+            or chat_id is None or update_id is None:
         return None
 
     name = " ".join(
@@ -180,6 +238,7 @@ def parse_telegram_update(update: dict) -> InboundMessage | None:
         text=text or None,
         sender_name=name or None,
         attachments=tuple(attachments),
+        kind=kind,
     )
 
 
@@ -243,8 +302,8 @@ def download_attachment(platform: str, encrypted_token: str,
     content_type = (response_type or attachment.file_type or
                     mimetypes.guess_type(file_name or "")[0] or "application/octet-stream")
     content_type = content_type.partition(";")[0].strip()
-    if content_type not in SAFE_RECEIPT_TYPES:
-        raise ValueError("Only safe raster image attachments are supported")
+    if content_type not in SAFE_ATTACHMENT_TYPES:
+        raise ValueError("Only image and audio attachments are supported")
     return AttachmentDownload(content=content, content_type=content_type,
                               file_name=file_name)
 

@@ -11,7 +11,7 @@ from app.models.attachment import Attachment
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.user import User
-from app.services.platforms import SAFE_RECEIPT_TYPES
+from app.services.platforms import SAFE_ATTACHMENT_TYPES
 
 router = APIRouter()
 
@@ -33,7 +33,7 @@ def attachment_content(
     # The same 404 covers missing, foreign, and URL-only attachments so this
     # endpoint cannot be used to enumerate another seller's evidence.
     if (not attachment or attachment.blob is None
-            or attachment.file_type not in SAFE_RECEIPT_TYPES):
+            or attachment.file_type not in SAFE_ATTACHMENT_TYPES):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail="Attachment not found")
 
