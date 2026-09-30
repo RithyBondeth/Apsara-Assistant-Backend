@@ -32,6 +32,9 @@ class Conversation(Base):
     # A seller can take over one sensitive thread without disabling the bot for
     # every other customer on that Messenger page or Telegram bot.
     handling_mode = Column(String, nullable=False, default="auto", server_default="auto")
+    # Why it is manual: "reply" (the seller answered) or "explicit" (they
+    # pressed Take over). Only a reply expires; see services/handoff.py.
+    manual_mode_source = Column(String(10))
     assigned_user_id = Column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )

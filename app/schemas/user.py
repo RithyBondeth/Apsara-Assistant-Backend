@@ -38,6 +38,9 @@ class UserUpdate(BaseModel):
     delivery_info: str | None = Field(default=None, max_length=SHOP_TEXT_MAX)
     shop_policies: str | None = Field(default=None, max_length=SHOP_TEXT_MAX)
     language: Literal["en", "km"] | None = None
+    # Hours before the assistant resumes a thread the seller replied to.
+    # 0 keeps it quiet until they hand the thread back by hand.
+    manual_timeout_hours: int | None = Field(default=None, ge=0, le=720)
     low_stock_email_enabled: bool | None = None
     low_stock_telegram_enabled: bool | None = None
     attention_telegram_enabled: bool | None = None
@@ -86,6 +89,7 @@ class UserOut(BaseModel):
     delivery_info: str | None
     shop_policies: str | None
     language: str
+    manual_timeout_hours: int
     low_stock_email_enabled: bool
     low_stock_telegram_enabled: bool
     attention_telegram_enabled: bool
