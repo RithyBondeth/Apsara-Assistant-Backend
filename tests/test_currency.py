@@ -69,12 +69,25 @@ def test_switching_currency_changes_what_the_assistant_quotes(client, seller):
     assert "12.50 USD" not in captured.system_prompt
 
 
-def test_the_model_is_told_not_to_convert(client, seller):
+def test_the_model_quotes_both_currencies_and_never_converts_itself(client, seller):
+    """Cambodia is bimonetary: the prompt carries both amounts at the shop's
+    rate so the model copies rather than calculates."""
+    seller.product(name="Krama", price="4.00", stock=3)
+    client.patch("/api/v1/auth/me", json={"khr_rate": 4100}, headers=seller.headers)
     conversation = seller.conversation()
     with ai.replies() as captured:
         client.post(f"/api/v1/chat/{conversation['id']}", json={"message": "hi"},
                     headers=seller.headers)
-    assert "never convert to another currency" in captured.system_prompt
+    assert "• Krama — 4.00 USD (16,400 KHR)" in captured.system_prompt
+    assert "4,100 KHR per USD" in captured.system_prompt
+    assert "Never\n  work out a conversion yourself" in captured.system_prompt
+
+
+def test_the_rate_is_bounded(client, seller):
+    assert client.patch("/api/v1/auth/me", json={"khr_rate": 41},
+                        headers=seller.headers).status_code == 422
+    assert client.patch("/api/v1/auth/me", json={"khr_rate": 4050},
+                        headers=seller.headers).json()["khr_rate"] == "4050.00"
 
 
 # ── Orders ───────────────────────────────────────────────────────────────────

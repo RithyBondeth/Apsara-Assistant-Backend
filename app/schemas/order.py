@@ -59,6 +59,8 @@ class OrderOut(BaseModel):
     payment_receipt_attachment_id: UUID | None
     payment_confirmed_by_user_id: UUID | None
     paid_at: datetime | None
+    paid_amount: Decimal | None = None
+    paid_currency: str | None = None
     created_at: datetime
     updated_at: datetime
     items: list[OrderItemOut] = []

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from functools import lru_cache
 from uuid import UUID
 
@@ -8,7 +9,7 @@ from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.core.config import settings
-from app.core.currency import format_amount
+from app.core.currency import DEFAULT_CURRENCY, format_dual, other_currency
 from app.models.attachment import Attachment
 from app.models.message import Message
 from app.models.product import Product
@@ -81,8 +82,13 @@ def _client() -> OpenAI:
 
 def build_system_prompt(user: User, products: list[Product]) -> str:
     business = user.business_name or user.full_name
-    currency = user.currency
+    currency = user.currency or DEFAULT_CURRENCY
     payment_qr = default_payment_qr_url(user)
+
+    # Every price is rendered in both currencies at the shop's rate, so the
+    # model copies rather than converts — arithmetic is where it slips.
+    def money(amount) -> str:
+        return format_dual(amount, currency, user.khr_rate or 4100)
 
     product_lines: list[str] = []
     rendered_variants = 0
@@ -96,12 +102,12 @@ def build_system_prompt(user: User, products: list[Product]) -> str:
             and not active_variants[0].option_values
         )
         line = (
-            f"• {p.name} — {format_amount(active_variants[0].price, currency)}"
+            f"• {p.name} — {money(active_variants[0].price)}"
             if single_default
             else (
                 f"• {p.name}"
                 if active_variants
-                else f"• {p.name} — {format_amount(p.price, currency)}"
+                else f"• {p.name} — {money(p.price)}"
             )
         )
         if p.description:
@@ -119,7 +125,7 @@ def build_system_prompt(user: User, products: list[Product]) -> str:
                 identifiers = f"; SKU: {variant.sku}" if variant.sku else ""
                 line += (
                     f"\n  - Variant {variant.id} ({options}) — "
-                    f"{format_amount(variant.price, currency)}; {availability}{identifiers}"
+                    f"{money(variant.price)}; {availability}{identifiers}"
                 )
                 rendered_variants += 1
         else:
@@ -154,6 +160,10 @@ then the QR image.
   will check the transfer and confirm
 """ if payment_qr else ""
 
+    other = other_currency(currency)
+    rate = f"{Decimal(user.khr_rate or 4100):,.0f}"
+    example = money(Decimal("10") if currency == "USD" else Decimal("40000"))
+
     return f"""You are Apsara, an AI-powered sales assistant for "{business}".
 
 Your role:
@@ -184,9 +194,12 @@ Never switch the customer to a different language than the one they chose.
 BEHAVIOR RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Give prices directly — never make a customer ask twice
-- Prices are in {currency}. Quote them in {currency} and say so the way a
-  local shop would; never convert to another currency and never quote a bare
-  number that leaves the currency ambiguous
+- Prices are in {currency}; customers may pay in {other} at this shop's rate
+  of {rate} KHR per USD. Quote the price in both, exactly as written in the
+  catalogue — for example "{example}" — the way a local shop would. Never
+  work out a conversion yourself, never quote a bare number that leaves the
+  currency ambiguous, and if asked for a total, add the catalogue amounts
+  in {currency} and give the {other} figure only if it is a single item
 - If an item is out of stock, apologize and suggest alternatives if available
 - When a product has variant options, ask for every required option (such as
   size and color) before treating the customer as ready to order. Never choose

@@ -89,17 +89,37 @@ def test_an_amount_that_does_not_match_is_called_out(client, seller, db):
     assert receipts_of(client, seller, order)[0]["verdict"] == "amount_mismatch"
 
 
-def test_a_receipt_in_another_currency_is_not_compared(client, seller, db):
+def test_a_riel_receipt_on_a_dollar_order_is_compared_at_the_shops_rate(client, seller, db):
+    """32,000 riel for 8 dollars is what a customer paying at their bank's
+    4,000 rate sends; at the shop's 4,100 that is 7.80, within tolerance."""
     integration = link(client, seller, db)
     order, _ = order_on_channel(client, seller, db, integration)
 
     with wh.sends(), alerts() as to_seller, ai.replies(reading(amount=32000, currency="KHR")):
         send_photo(client, integration)
 
-    assert "different currency" in to_seller[0]["text"]
+    assert "✅ Receipt reads 32,000 KHR ≈ 7.80 USD — matches" in to_seller[0]["text"]
     [receipt] = receipts_of(client, seller, order)
-    assert receipt["verdict"] == "currency_differs"
-    assert receipt["read"] == "32,000 KHR"
+    assert receipt["verdict"] == "match"
+    assert receipt["read"] == "32,000 KHR ≈ 7.80 USD"
+
+    # Confirming records what was actually paid, not what was priced.
+    client.post(f"/api/v1/orders/{order['id']}/receipts/{receipt['id']}/confirm",
+                headers=seller.headers)
+    paid = client.get(f"/api/v1/orders/{order['id']}", headers=seller.headers).json()
+    assert (paid["paid_amount"], paid["paid_currency"]) == ("32000.00", "KHR")
+    assert (paid["total_amount"], paid["currency"]) == ("8.00", "USD")
+
+
+def test_a_riel_receipt_far_off_the_rate_is_a_mismatch(client, seller, db):
+    integration = link(client, seller, db)
+    order, _ = order_on_channel(client, seller, db, integration)
+
+    with wh.sends(), alerts() as to_seller, ai.replies(reading(amount=20000, currency="KHR")):
+        send_photo(client, integration)
+
+    assert "⚠️ Receipt reads 20,000 KHR ≈ 4.88 USD, the order is 8.00 USD" in to_seller[0]["text"]
+    assert receipts_of(client, seller, order)[0]["verdict"] == "amount_mismatch"
 
 
 def test_the_same_reference_offered_twice_is_a_duplicate(client, seller, db):

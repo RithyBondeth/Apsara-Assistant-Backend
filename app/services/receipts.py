@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.clock import utcnow
 from app.core.config import settings
-from app.core.currency import CURRENCIES, format_amount
+from app.core.currency import CURRENCIES, convert, format_amount
 from app.database import SessionLocal
 from app.models.attachment import Attachment
 from app.models.conversation import Conversation
@@ -45,6 +45,11 @@ RECEIPT_OCR = "receipt_ocr"
 READ = "read"              # the model returned a reading
 NOT_RECEIPT = "not_receipt"  # it read the image, and it is not a receipt
 FAILED = "failed"          # model error, quota, or not configured
+
+# How far a converted riel amount may sit from the order and still match.
+# Banks apply their own rate — 4,000 to 4,150 to the dollar in practice — so
+# an exact comparison would fail most honest payments.
+RATE_TOLERANCE = Decimal("0.03")
 
 # Verdicts, relative to one order.
 MATCH = "match"
@@ -238,9 +243,19 @@ def assess(db: Session, attachment: Attachment, order: Order) -> Assessment:
 
     if attachment.ocr_amount is None:
         return Assessment(UNREADABLE, None)
+    total = Decimal(order.total_amount)
     if attachment.ocr_currency and attachment.ocr_currency != order.currency:
-        return Assessment(CURRENCY_DIFFERS, read)
-    if attachment.ocr_amount == Decimal(order.total_amount):
+        rate = order.user.khr_rate if order.user else None
+        if not rate:
+            return Assessment(CURRENCY_DIFFERS, read)
+        # A riel payment on a dollar order (or the reverse) is normal here;
+        # compare at the shop's rate, with room for the bank's.
+        converted = convert(attachment.ocr_amount, attachment.ocr_currency, order.currency, rate)
+        read = f"{read} ≈ {format_amount(converted, order.currency)}"
+        if total and abs(converted - total) / total <= RATE_TOLERANCE:
+            return Assessment(MATCH, read)
+        return Assessment(AMOUNT_MISMATCH, read)
+    if attachment.ocr_amount == total:
         return Assessment(MATCH, read)
     return Assessment(AMOUNT_MISMATCH, read)
 

@@ -53,6 +53,10 @@ class Order(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     paid_at = Column(DateTime)
+    # What was actually paid, in what — kept when a receipt was read, since
+    # a riel payment on a dollar order is a fact the books need.
+    paid_amount = Column(Numeric(12, 2))
+    paid_currency = Column(String(3))
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
