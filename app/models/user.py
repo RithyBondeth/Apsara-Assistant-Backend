@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -20,6 +20,10 @@ class User(Base):
     # carrying their own, which would allow an order to mix currencies and
     # make its total meaningless.
     currency = Column(String(3), nullable=False, server_default="USD")
+    # Riel per dollar, as this shop takes it. Cambodia is bimonetary: the
+    # catalogue is priced in one currency and customers pay in either, so
+    # the assistant quotes both and receipts are compared at this rate.
+    khr_rate = Column(Numeric(10, 2), nullable=False, default=4100, server_default="4100")
     # The shop's payment QR — a KHQR, ABA or Wing code. Held as a URL rather
     # than a stored file because that is what both platforms want: they fetch
     # the image themselves, the same way product images already work. Empty

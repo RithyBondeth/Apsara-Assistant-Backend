@@ -152,6 +152,15 @@ and `POST /orders/{id}/receipts/{attachment_id}/scan` re-reads on demand.
 Scans have their own daily ceiling, `AI_DAILY_RECEIPT_LIMIT`, because the
 customer decides how many photos arrive.
 
+**Both currencies, at the shop's own rate.** Cambodia is bimonetary: a shop
+prices in one currency and customers pay in either. `users.khr_rate` (default
+4,100) is what the catalogue is rendered with in the prompt — every price
+reaches the model already written as "4.00 USD (16,400 KHR)", so it copies
+rather than converts — and what a receipt read in the other currency is
+compared at, within `receipts.RATE_TOLERANCE` (3%), since banks apply their
+own rate. Confirming records `orders.paid_amount` / `paid_currency`: a riel
+payment on a dollar order is a fact the books need.
+
 **Webhooks prove who is calling.** They are the only unauthenticated endpoints:
 Messenger by an app-level signature over the raw body, Telegram by a
 per-connection secret header, Stripe by its signature over the raw body. They

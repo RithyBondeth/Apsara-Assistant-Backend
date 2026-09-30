@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
+from decimal import Decimal
+
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.core.currency import TCurrency
@@ -27,6 +29,9 @@ class UserUpdate(BaseModel):
     full_name: str | None = None
     business_name: str | None = None
     currency: TCurrency | None = None
+    # Riel per dollar. Bounded so a typo cannot make every riel receipt a
+    # mismatch — or a match.
+    khr_rate: Decimal | None = Field(default=None, gt=1000, lt=20000)
     payment_qr_url: str | None = None
     shop_address: str | None = Field(default=None, max_length=SHOP_TEXT_MAX)
     shop_hours: str | None = Field(default=None, max_length=SHOP_TEXT_MAX)
@@ -74,6 +79,7 @@ class UserOut(BaseModel):
     full_name: str
     business_name: str | None
     currency: str
+    khr_rate: Decimal
     payment_qr_url: str | None
     shop_address: str | None
     shop_hours: str | None

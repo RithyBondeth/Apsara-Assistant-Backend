@@ -517,6 +517,14 @@ def confirm_order_receipt(
     order.payment_receipt_attachment_id = receipt.id
     order.payment_confirmed_by_user_id = current_user.id
     order.paid_at = now
+    # What the receipt said was paid, if it was read; the seller confirming
+    # is what makes it true, the reading is what makes it a number.
+    if receipt.ocr_amount is not None:
+        order.paid_amount = receipt.ocr_amount
+        order.paid_currency = receipt.ocr_currency or order.currency
+    else:
+        order.paid_amount = order.total_amount
+        order.paid_currency = order.currency
     db.commit()
     db.refresh(order)
     return order
