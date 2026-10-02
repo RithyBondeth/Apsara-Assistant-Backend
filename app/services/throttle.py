@@ -43,16 +43,20 @@ def normalise(email: str) -> str:
 def client_ip(request) -> str | None:
     """The caller's address, as far as it can be trusted.
 
-    X-Forwarded-For is only read when TRUST_PROXY_HEADERS says a proxy is in
+    A proxy header is only read when TRUST_PROXY_HEADERS says a proxy is in
     front and setting it. Reading it unconditionally would be worse than not
     having an IP ceiling at all: any caller could put a fresh value in the
     header on every request and never be counted twice.
+
+    Even behind a trusted proxy, only the part the proxy wrote can be believed.
+    X-Forwarded-For is appended to, not replaced, so its left-most entry is
+    whatever the caller sent — the right-most is the address our proxy saw.
+    A header the proxy overwrites outright (Railway's X-Real-IP) is read whole.
     """
     if settings.TRUST_PROXY_HEADERS:
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            # Left-most entry is the original client; the rest are proxies.
-            return forwarded.split(",")[0].strip() or None
+        value = request.headers.get(settings.CLIENT_IP_HEADER)
+        if value:
+            return value.split(",")[-1].strip() or None
     return request.client.host if request.client else None
 
 

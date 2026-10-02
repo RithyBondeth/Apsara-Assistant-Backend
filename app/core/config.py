@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     # controls sets it: when nothing strips an inbound header, a caller can put
     # any address there and step around the per-address ceiling at will.
     TRUST_PROXY_HEADERS: bool = False
+    # Which header the trusted proxy writes the caller's address into. Behind
+    # Railway use X-Real-IP, which its edge sets and a caller cannot add to.
+    CLIENT_IP_HEADER: str = "X-Forwarded-For"
 
     # Lifetimes for emailed codes.
     PASSWORD_RESET_EXPIRE_MINUTES: int = 30
