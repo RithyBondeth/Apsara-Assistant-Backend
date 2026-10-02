@@ -28,6 +28,7 @@ from app.schemas.conversation import (
 )
 from app.schemas.message import MessageCreate, MessageOut
 from app.services.platforms import send_reply
+from app.services import handoff
 from app.services.seller_alerts import clear_attention
 
 router = APIRouter()
@@ -254,10 +255,16 @@ def update_conversation(
         raise HTTPException(status_code=404, detail="Team member not found")
     for field, value in changes.items():
         setattr(conversation, field, value)
-    if changes.get("handling_mode") == "manual" and "assigned_user_id" not in changes:
-        conversation.assigned_user_id = current_user.id
-    elif changes.get("handling_mode") == "auto" and "assigned_user_id" not in changes:
-        conversation.assigned_user_id = None
+    # Pressing Take over is a standing instruction; it does not expire.
+    if changes.get("handling_mode") == "manual":
+        handoff.take_over(
+            conversation, handoff.EXPLICIT,
+            current_user.id if "assigned_user_id" not in changes else None,
+        )
+    elif changes.get("handling_mode") == "auto":
+        conversation.manual_mode_source = None
+        if "assigned_user_id" not in changes:
+            conversation.assigned_user_id = None
     if changes.get("status") == "closed":
         clear_attention(conversation)
     db.commit()
@@ -497,8 +504,9 @@ def send_message(
     conversation.last_seller_message_at = now
     if conversation.first_response_at is None and conversation.first_customer_message_at:
         conversation.first_response_at = now
-    conversation.handling_mode = "manual"
-    conversation.assigned_user_id = current_user.id
+    # Answering is an implicit takeover: it expires after the seller's
+    # timeout, unlike pressing Take over.
+    handoff.take_over(conversation, handoff.REPLY, current_user.id)
     # The seller has answered; the next time the customer needs them is a new
     # episode, and alerts again.
     clear_attention(conversation)

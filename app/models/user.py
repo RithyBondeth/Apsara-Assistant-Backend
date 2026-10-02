@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, Numeric, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -42,6 +42,11 @@ class User(Base):
     # Alerts, and the seller's language they are written in. The web app keeps
     # `language` in step with the language the seller picked there.
     language = Column(String(2), nullable=False, default="en", server_default="en")
+    # How long the assistant stays quiet on a thread after the seller answers
+    # it themselves. Replying means "I have got this one", not "never speak
+    # here again" — without an expiry a busy week leaves every thread the
+    # seller touched permanently unanswered. 0 disables the resume.
+    manual_timeout_hours = Column(Integer, nullable=False, default=12, server_default="12")
     low_stock_email_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
     low_stock_telegram_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
     attention_telegram_enabled = Column(Boolean, nullable=False, default=True, server_default="true")

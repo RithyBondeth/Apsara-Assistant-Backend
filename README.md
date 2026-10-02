@@ -93,6 +93,7 @@ app/
                         verification    password-reset and OTP codes
                         seller_alerts   Telegram alerts to the seller's own phone
                         receipts        reading a customer's receipt, and judging it
+                        handoff         when a thread is the seller's, and when it is not
                         telegram_link   linking the seller's Telegram without a chat id
   models/             SQLAlchemy tables
   core/               config, security, crypto, clock, logging
@@ -161,6 +162,15 @@ compared at, within `receipts.RATE_TOLERANCE` (3%), since banks apply their
 own rate. Confirming records `orders.paid_amount` / `paid_currency`: a riel
 payment on a dollar order is a fact the books need.
 
+**A reply pauses the assistant; it does not silence it.** Answering a
+customer takes the thread over implicitly (`manual_mode_source = "reply"`),
+and the assistant picks it back up once the seller has been quiet for
+`users.manual_timeout_hours` (default 12, 0 = never). Pressing *Take over* is
+explicit and stands until the thread is handed back. Without the expiry, a
+shop that answered ten customers on Monday had ten threads the assistant
+would not touch on Tuesday, with nothing on screen saying why. The check runs
+on the next inbound message, in `app/services/handoff.py`.
+
 **Webhooks prove who is calling.** They are the only unauthenticated endpoints:
 Messenger by an app-level signature over the raw body, Telegram by a
 per-connection secret header, Stripe by its signature over the raw body. They
@@ -204,6 +214,7 @@ that bite:
 | `JOB_RUNNER` | `inline` or `worker`. With `worker`, something must actually run `python -m app.worker`, or queued replies are never sent. |
 | `AI_DAILY_REPLY_LIMIT` | Inbound volume is not ours to control; this is the ceiling on OpenAI spend per seller per day. |
 | `AI_DAILY_DRAFT_LIMIT` | Separate daily ceiling for seller-triggered AI order proposals. |
+| `manual_timeout_hours` (per seller, not env) | Hours of seller silence before the assistant resumes a thread they replied to. 0 restores the old behaviour, where only *Return to Apsara* brings it back. |
 | `AI_DAILY_RECEIPT_LIMIT` | Receipt scans per seller per day; 0 turns scanning off. Customers choose how many photos to send, so this is the only cap on vision spend. |
 | `APP_BASE_URL` | Seller alerts link straight into the inbox (`/chat?conversation=…`) and an order (`/orders?order=…`); a wrong value sends the seller to the wrong site. |
 

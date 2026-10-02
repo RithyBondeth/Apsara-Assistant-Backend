@@ -46,6 +46,7 @@ from app.services.platforms import (
 from app.services.queue import register
 from app.services.quota import spend_reply
 from app.services.payment_qrs import default_payment_qr_url
+from app.services.handoff import resume_if_due
 from app.services.receipts import queue_scan
 from app.services.seller_alerts import flag_attention
 
@@ -267,6 +268,13 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
         elif message.kind != TEXT and not message.text:
             _needs_seller(db, conversation, customer, "attention_unsupported", None)
             return
+
+        # A reply means "I have got this one", not "never speak here again".
+        # Once the seller has been quiet for their timeout, the assistant
+        # takes the thread back rather than leaving it dead.
+        seller = db.query(User).filter(User.id == connection.user_id).first()
+        if seller is not None and resume_if_due(conversation, seller):
+            db.commit()
 
         # A receipt without a caption is evidence, not a prompt for the model.
         if conversation.handling_mode == "manual" or not connection.auto_reply:
