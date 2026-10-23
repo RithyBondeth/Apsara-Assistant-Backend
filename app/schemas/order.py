@@ -65,6 +65,9 @@ class OrderOut(BaseModel):
     paid_amount: Decimal | None = None
     paid_currency: str | None = None
     customer_notified_events: list[str] = []
+    khqr_status: str | None = None
+    khqr_expires_at: datetime | None = None
+    khqr_image_url: str | None = None
     created_at: datetime
     updated_at: datetime
     items: list[OrderItemOut] = []

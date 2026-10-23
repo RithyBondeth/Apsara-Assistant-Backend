@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.config import settings
+from app.core.crypto import encrypt
 from app.core.security import create_access_token, hash_password, verify_password
 from app.database import get_db
 from app.models.user import User
@@ -93,7 +94,11 @@ def update_me(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if "bakong_api_token" in data:
+        token = (data.pop("bakong_api_token") or "").strip()
+        current_user.bakong_api_token = encrypt(token) if token else None
+    for field, value in data.items():
         setattr(current_user, field, value)
     db.commit()
     db.refresh(current_user)

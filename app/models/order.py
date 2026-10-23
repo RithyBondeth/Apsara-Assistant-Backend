@@ -60,6 +60,22 @@ class Order(Base):
     # Order events the customer has been told about, so a redelivered job or
     # a status set twice never sends the same message again.
     customer_notified_events = Column(JSONB, nullable=False, default=list, server_default="[]")
+    # The order's dynamic KHQR, if one was issued — see app/services/khqr.py.
+    # The MD5 of the text is what Bakong is asked about.
+    khqr_payload = Column(Text)
+    khqr_md5 = Column(String(32), index=True)
+    khqr_expires_at = Column(DateTime)
+    # issued, paid, expired, mismatch
+    khqr_status = Column(String(16))
+    khqr_checked_at = Column(DateTime)
+    @property
+    def khqr_image_url(self) -> str | None:
+        if not self.khqr_md5:
+            return None
+        from app.services.khqr_orders import image_url
+
+        return image_url(self)
+
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 

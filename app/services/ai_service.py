@@ -93,7 +93,8 @@ def build_system_prompt(user: User, products: list[Product], *,
     rendered in full — see catalogue.name_index_section."""
     business = user.business_name or user.full_name
     currency = user.currency or DEFAULT_CURRENCY
-    payment_qr = default_payment_qr_url(user)
+    payment_qr = default_payment_qr_url(user) or (
+        user.khqr_enabled and user.bakong_account_id)
 
     # Every price is rendered in both currencies at the shop's rate, so the
     # model copies rather than converts — arithmetic is where it slips.

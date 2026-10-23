@@ -24,7 +24,7 @@ from app.models.user import User
 from app.schemas.message import AttachmentOut, ReceiptOut
 from app.schemas.order import CheckoutOut, OrderCreate, OrderOut, OrderUpdate
 from app.services import stripe_gateway
-from app.services import customer_updates, receipts
+from app.services import customer_updates, khqr_orders, receipts
 from app.services import storage
 from app.services.inventory import (
     FULFILLED_STATUSES,
@@ -440,6 +440,44 @@ def _with_verdict(db: Session, receipt: Attachment, order: Order) -> ReceiptOut:
     out.read = assessment.read
     out.duplicate_of_order_id = assessment.duplicate_of_order_id
     return out
+
+
+@router.post("/{order_id}/khqr", response_model=OrderOut)
+def issue_order_khqr(
+    order_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Give the order a dynamic KHQR for its exact total, or return the one
+    still payable. Bakong is then checked until it is paid or expires."""
+    order = _owned_order(db, order_id, current_user.id, lock=True)
+    try:
+        khqr_orders.issue(db, order, current_user)
+    except khqr_orders.NotAvailable as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+@router.post("/{order_id}/khqr/check", response_model=OrderOut)
+def check_order_khqr(
+    order_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Ask Bakong now, rather than waiting for the next scheduled look."""
+    order = _owned_order(db, order_id, current_user.id, lock=True)
+    if not order.khqr_md5:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="This order has no KHQR to check")
+    result = khqr_orders.check_now(db, order, current_user)
+    db.commit()
+    if result.outcome == "unavailable":
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=result.detail or "Bakong is unavailable")
+    db.refresh(order)
+    return order
 
 
 @router.get("/{order_id}/receipts", response_model=list[ReceiptOut])

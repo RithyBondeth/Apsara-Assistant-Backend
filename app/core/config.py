@@ -90,6 +90,14 @@ class Settings(BaseSettings):
     S3_SECRET_ACCESS_KEY: str = ""
     S3_KEY_PREFIX: str = "media"
 
+    # Dynamic KHQR. The Bakong Open API answers Cambodian addresses only; a
+    # server hosted abroad points BAKONG_API_URL at a relay in the country.
+    # BAKONG_API_TOKEN is the platform's own, used for sellers without one.
+    BAKONG_API_URL: str = "https://api-bakong.nbc.gov.kh"
+    BAKONG_API_TOKEN: str = ""
+    KHQR_EXPIRE_MINUTES: int = 60
+    KHQR_POLL_SECONDS: int = 20
+
     # Customer-supplied images are persisted so expiring platform URLs do not
     # destroy payment evidence. Bound each download before it reaches storage.
     MAX_ATTACHMENT_BYTES: int = 10_000_000

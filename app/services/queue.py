@@ -38,9 +38,12 @@ def register(kind: str):
     return decorator
 
 
-def enqueue(db: Session, kind: str, payload: dict, *, max_attempts: int = 5) -> Job:
-    """Persist a job. Committed by the caller alongside whatever prompted it."""
-    job = Job(kind=kind, payload=payload, max_attempts=max_attempts)
+def enqueue(db: Session, kind: str, payload: dict, *, max_attempts: int = 5,
+            run_after=None) -> Job:
+    """Persist a job. Committed by the caller alongside whatever prompted it.
+    `run_after` delays it — a poll scheduling its own next look."""
+    job = Job(kind=kind, payload=payload, max_attempts=max_attempts,
+              **({"run_after": run_after} if run_after is not None else {}))
     db.add(job)
     # Woken on commit rather than now: until then the row is invisible to the
     # drainer, which would find nothing and go back to sleep.

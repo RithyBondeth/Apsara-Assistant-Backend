@@ -18,6 +18,7 @@ from app.services import alerts  # noqa: F401
 from app.services import seller_alerts  # noqa: F401
 from app.services import receipts  # noqa: F401
 from app.services import customer_updates  # noqa: F401
+from app.services import khqr_orders  # noqa: F401
 from app.services.queue import work
 
 from app.core.logging import configure as configure_logging
