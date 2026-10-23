@@ -26,7 +26,7 @@ def test_returns_both_messages_in_the_shape_the_client_expects(client, seller):
 
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body) == {"customer_message", "ai_message", "qr_message"}
+    assert set(body) == {"customer_message", "ai_message", "qr_message", "photo_messages"}
     # No QR was asked for, so the field is present and empty rather than absent.
     assert body["qr_message"] is None
     for message in (body["customer_message"], body["ai_message"]):

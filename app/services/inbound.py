@@ -26,8 +26,10 @@ from app.services.ai_service import (
     build_system_prompt,
     generate_ai_reply,
     payment_qr_message,
+    product_photo_message,
     split_needs_seller,
     split_payment_qr,
+    split_photos,
 )
 from app.services.platforms import (
     MESSENGER,
@@ -293,7 +295,7 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
         if generated is None:
             _needs_seller(db, conversation, customer, "attention_unanswered", message.text)
             return
-        reply, qr_url, wants_seller = generated
+        reply, qr_url, wants_seller, photos = generated
 
         # Nothing below stores a message the platform refused: the customer
         # never saw it, so recording it would leave the seller reading a
@@ -316,6 +318,17 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
                 content=reply,
             ))
             delivered = True
+
+        for product, url in photos:
+            # Each photo stands alone: one the platform refused is logged and
+            # left out of the thread, and the rest still go.
+            if send_image(connection.platform, connection.access_token,
+                          message.sender_id, url):
+                db.add(product_photo_message(conversation.id, product, url))
+                delivered = True
+            else:
+                logger.error("Product photo not delivered for conversation %s",
+                             conversation.id)
 
         if qr_url:
             if send_image(connection.platform, connection.access_token,
@@ -368,9 +381,9 @@ def _order_awaiting_payment(db: Session, conversation: Conversation) -> Order | 
 
 
 def _generate(db: Session, connection: PlatformConnection,
-              conversation: Conversation) -> tuple[str, str | None, bool] | None:
-    """The reply text, the QR to attach if the assistant asked for one, and
-    whether it asked for the seller.
+              conversation: Conversation) -> tuple[str, str | None, bool, list] | None:
+    """The reply text, the QR to attach if the assistant asked for one,
+    whether it asked for the seller, and the product photos it asked to send.
 
     `None` means no reply could be produced at all — distinct from a reply
     that carries neither.
@@ -405,6 +418,8 @@ def _generate(db: Session, connection: PlatformConnection,
 
     reply, wants_qr = split_payment_qr(raw)
     reply, wants_seller = split_needs_seller(reply)
+    reply, photos = split_photos(reply, selection.products)
     # Guarded against the seller having cleared their QR since the prompt was
     # built, and against a model that emits the marker regardless.
-    return reply, default_payment_qr_url(seller) if wants_qr else None, wants_seller
+    return (reply, default_payment_qr_url(seller) if wants_qr else None,
+            wants_seller, photos)

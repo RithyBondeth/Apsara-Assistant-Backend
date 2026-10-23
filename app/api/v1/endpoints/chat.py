@@ -23,8 +23,10 @@ from app.services.ai_service import (
     generate_ai_reply,
     generate_order_draft,
     payment_qr_message,
+    product_photo_message,
     split_needs_seller,
     split_payment_qr,
+    split_photos,
 )
 from app.services import catalogue
 from app.services.payment_qrs import default_payment_qr_url
@@ -222,6 +224,7 @@ def chat(
     reply_text, wants_qr = split_payment_qr(raw_reply)
     # A rehearsal has no seller to wake: the marker is only stripped.
     reply_text, _wants_seller = split_needs_seller(reply_text)
+    reply_text, photos = split_photos(reply_text, selection.products)
     ai_msg = Message(
         conversation_id=conversation_id,
         sender_type="assistant",
@@ -229,6 +232,10 @@ def chat(
         content=reply_text,
     )
     db.add(ai_msg)
+
+    photo_msgs = [product_photo_message(conversation_id, product, url)
+                  for product, url in photos]
+    db.add_all(photo_msgs)
 
     qr_msg = None
     qr_url = default_payment_qr_url(current_user) if wants_qr else None
@@ -244,9 +251,12 @@ def chat(
     db.refresh(ai_msg)
     if qr_msg is not None:
         db.refresh(qr_msg)
+    for photo_msg in photo_msgs:
+        db.refresh(photo_msg)
 
     return ChatResponse(
         customer_message=MessageOut.model_validate(customer_msg),
         ai_message=MessageOut.model_validate(ai_msg),
         qr_message=MessageOut.model_validate(qr_msg) if qr_msg else None,
+        photo_messages=[MessageOut.model_validate(m) for m in photo_msgs],
     )

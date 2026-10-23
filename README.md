@@ -25,6 +25,7 @@ This repository is the FastAPI backend. The seller dashboard lives in [Apsara-As
 
 - **AI replies grounded in the shop.** The catalogue, prices, address, hours, delivery and policies are rendered into the prompt. When the model is unsure, it escalates to the seller instead of guessing.
 - **Large catalogues.** Up to 100 products are shown to the assistant in full. Beyond that, it sees the products the conversation is about (matched by name, including Khmer written without spaces, by description words, or by SKU) and then best sellers, with the rest listed by name only.
+- **Product photos in chat.** The assistant can send a product's primary photo when a customer asks to see it, using an id-checked marker in a single model round trip.
 - **Unified inbox** for Facebook Messenger and Telegram, with idempotent message handling and a manual-mode takeover.
 - **Orders and payments.** AI order drafts, Stripe Checkout with each seller's own account, and payment-QR support for sellers who cannot use Stripe.
 - **Receipt verification.** A vision model reads customer receipt photos and returns a verdict against the order: `match`, `amount_mismatch`, `duplicate`, and others.
