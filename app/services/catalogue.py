@@ -83,7 +83,7 @@ def select_products(db: Session, user_id, history: list[Message]) -> Selection:
     """The products to render for a reply to `history` (oldest first)."""
     total = _active(db, user_id).count()
     if total <= CATALOGUE_LIMIT:
-        products = (_active(db, user_id).options(selectinload(Product.variants))
+        products = (_active(db, user_id).options(selectinload(Product.variants), selectinload(Product.images))
                     .order_by(Product.created_at.desc()).all())
         return Selection(products=products, total=total)
 
@@ -125,7 +125,7 @@ def select_products(db: Session, user_id, history: list[Message]) -> Selection:
         .all()
     )
     chosen_ids = [row.id for row in ranked[:CATALOGUE_LIMIT]]
-    by_id = {p.id: p for p in (_active(db, user_id).options(selectinload(Product.variants))
+    by_id = {p.id: p for p in (_active(db, user_id).options(selectinload(Product.variants), selectinload(Product.images))
                                .filter(Product.id.in_(chosen_ids)).all())}
     return Selection(
         products=[by_id[i] for i in chosen_ids if i in by_id],
