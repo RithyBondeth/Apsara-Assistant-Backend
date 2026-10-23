@@ -415,6 +415,19 @@ def register_telegram_webhook(encrypted_token: str, url: str, secret: str) -> Ch
         return CheckResult(False, "Registering the webhook failed unexpectedly.")
 
 
+def remove_telegram_webhook(encrypted_token: str) -> bool:
+    """Stop a bot calling us — for a shop that is being deleted. Never raises."""
+    try:
+        response = httpx.post(
+            f"https://api.telegram.org/bot{decrypt(encrypted_token)}/deleteWebhook",
+            timeout=SEND_TIMEOUT,
+        )
+        return response.status_code < 400
+    except Exception:
+        logger.warning("Could not remove a Telegram webhook", exc_info=True)
+        return False
+
+
 # ── Looking up who is writing ────────────────────────────────────────────────
 
 def fetch_messenger_profile(encrypted_token: str, psid: str) -> str | None:

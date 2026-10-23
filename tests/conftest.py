@@ -11,6 +11,7 @@ tests. Point it at a throwaway database — it is wiped repeatedly.
 
 import os
 import uuid
+from unittest import mock
 
 # Must precede any app import: app.database builds its engine from this at
 # import time, and app.core.config reads it into Settings.
@@ -23,6 +24,8 @@ os.environ.setdefault("SECRET_KEY", "test-secret-not-used-outside-tests")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 os.environ.setdefault("META_APP_SECRET", "test-app-secret")
 os.environ.setdefault("META_VERIFY_TOKEN", "test-verify-token")
+# Every test registers sellers from one address; test_signup turns it on.
+os.environ.setdefault("REGISTER_MAX_PER_IP", "0")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -145,11 +148,16 @@ class Seller:
 
 
 def register(client, business_name="Sok Silk Shop", password=PASSWORD):
+    """Sign up and confirm the address through the emailed link, as a
+    seller would."""
     email = f"{uuid.uuid4().hex[:12]}@example.com"
-    r = client.post("/api/v1/auth/register",
-                    json={"email": email, "password": password,
-                          "full_name": "Sok Dara", "business_name": business_name})
+    with mock.patch("app.api.v1.endpoints.auth.send_email_verification") as mail:
+        r = client.post("/api/v1/auth/register",
+                        json={"email": email, "password": password,
+                              "full_name": "Sok Dara", "business_name": business_name})
     assert r.status_code == 201, r.text
+    verified = client.post("/api/v1/auth/verify-email", json={"token": mail.call_args.args[1]})
+    assert verified.status_code == 200, verified.text
     token = client.post("/api/v1/auth/login",
                         data={"username": email, "password": password})
     assert token.status_code == 200, token.text

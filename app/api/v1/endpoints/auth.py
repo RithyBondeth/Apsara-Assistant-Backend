@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_actor, get_current_user, require_owner
+from app.core.clock import utcnow
 from app.core.config import settings
 from app.core.crypto import encrypt
 from app.core.security import create_access_token, hash_password, verify_password
@@ -13,13 +14,15 @@ from app.schemas.auth import (
     MessageResponse,
     OtpRequest,
     OtpVerifyRequest,
+    DeleteAccountRequest,
     ResetPasswordRequest,
+    VerifyEmailRequest,
 )
 from app.models.platform_connection import PlatformConnection
 from app.schemas.user import TelegramLinkOut, Token, UserCreate, UserOut, UserUpdate
-from app.services import telegram_link, throttle, verification
+from app.services import data_deletion, telegram_link, throttle, verification
 from app.services.platforms import TELEGRAM
-from app.services.email import send_login_otp, send_password_reset
+from app.services.email import send_email_verification, send_login_otp, send_password_reset
 
 router = APIRouter()
 
@@ -29,8 +32,25 @@ router = APIRouter()
 CODE_SENT = "If that email is registered, a message is on its way."
 
 
+UNVERIFIED = "Verify your email address before signing in. Check your inbox for the link."
+
+
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def register(payload: UserCreate, db: Session = Depends(get_db)):
+def register(
+    payload: UserCreate,
+    request: Request,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Create an account and email a link to confirm the address. Signing in
+    with the password waits for that link."""
+    ip = throttle.client_ip(request)
+    if throttle.too_many_signups(db, ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many accounts created from this network. Try again later.",
+            headers={"Retry-After": str(settings.REGISTER_WINDOW_MINUTES * 60)},
+        )
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
 
@@ -41,9 +61,51 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
         business_name=payload.business_name,
     )
     db.add(user)
-    db.commit()
+    throttle.record_signup(db, ip)
+    db.flush()
+    # issue() commits the account, the attempt and the code together.
+    token = verification.issue(db, user, verification.EMAIL_VERIFY)
+    if token:
+        background.add_task(send_email_verification, user.email, token)
     db.refresh(user)
     return user
+
+
+@router.post("/verify-email", response_model=MessageResponse)
+def verify_email(payload: VerifyEmailRequest, db: Session = Depends(get_db)):
+    user = verification.redeem_link_token(db, payload.token, verification.EMAIL_VERIFY)
+    if not user or not user.is_active:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This link is invalid or has expired. Request a new one from the sign-in page.",
+        )
+    _mark_verified(user)
+    db.commit()
+    return MessageResponse(detail="Your email is confirmed. You can now sign in.")
+
+
+@router.post("/verify-email/resend", response_model=MessageResponse,
+             status_code=status.HTTP_202_ACCEPTED)
+def resend_verification(
+    payload: ForgotPasswordRequest,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Same answer whether or not the address has an account, or is already
+    confirmed, so this cannot be used to find out which it is."""
+    user = db.query(User).filter(User.email == payload.email, User.is_active == True).first()
+    if user and user.email_verified_at is None:
+        token = verification.issue(db, user, verification.EMAIL_VERIFY)
+        if token:
+            background.add_task(send_email_verification, user.email, token)
+    return MessageResponse(detail=CODE_SENT)
+
+
+def _mark_verified(user: User) -> None:
+    """Any emailed code redeemed proves the address, whichever flow sent it."""
+    if user.email_verified_at is None:
+        user.email_verified_at = utcnow()
 
 
 @router.post("/login", response_model=Token)
@@ -74,6 +136,11 @@ def login(
         # make a disabled account an unlimited oracle for checking passwords.
         throttle.record_failure(db, form.username, ip)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
+
+    if user.email_verified_at is None:
+        # Not counted: the password was right, and the owner is the person
+        # most likely to be retrying while they look for the email.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=UNVERIFIED)
 
     # A correct password clears the slate, so earlier fumbles cannot accumulate
     # into a lockout for someone who is signing in perfectly well.
@@ -130,6 +197,28 @@ def update_me(
     db.commit()
     db.refresh(current_user)
     return _me(current_user, actor)
+
+
+# ── Closing the account ──────────────────────────────────────────────────────
+
+@router.post("/delete-account", status_code=status.HTTP_204_NO_CONTENT)
+def delete_account(
+    payload: DeleteAccountRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+    actor: User = Depends(get_actor),
+):
+    """Delete the shop and everything in it: catalogue, customers, chats,
+    orders, staff, connections. Owner only, and only with the password —
+    a stolen session alone must not be able to erase a business."""
+    if actor.shop_id is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Ask the shop owner to remove you from the team")
+    if not verify_password(payload.password, actor.password_hash):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Password is incorrect")
+    data_deletion.delete_shop(db, actor)
+    db.commit()
+    response.delete_cookie(settings.AUTH_COOKIE_NAME, path="/")
 
 
 # ── Telegram alerts ──────────────────────────────────────────────────────────
@@ -219,6 +308,9 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
         )
 
     user.password_hash = hash_password(payload.new_password)
+    # The link arrived at this address, which proves it — and is how invited
+    # staff, who never get a sign-up email, confirm theirs.
+    _mark_verified(user)
     # Anything else outstanding for this account dies with the old password —
     # including OTPs, which would otherwise still let an attacker back in.
     verification.invalidate_outstanding(db, user, verification.PASSWORD_RESET)
@@ -256,6 +348,8 @@ def verify_otp(payload: OtpVerifyRequest, response: Response, db: Session = Depe
     )
     if not user or not verification.redeem_otp(db, user, payload.code):
         raise invalid
+    _mark_verified(user)
+    db.commit()
 
     token = create_access_token(str(user.id))
     _set_auth_cookie(response, token)

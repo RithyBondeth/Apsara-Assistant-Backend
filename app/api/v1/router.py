@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import require_owner
 
-from app.api.v1.endpoints import attachments, auth, products, customers, conversations, orders, chat, webhooks, integrations, inventory, media, payment_qrs, operations, events, staff
+from app.api.v1.endpoints import attachments, auth, products, customers, conversations, orders, chat, webhooks, integrations, inventory, media, payment_qrs, operations, events, staff, privacy
 
 api_router = APIRouter()
 
@@ -22,4 +22,5 @@ api_router.include_router(payment_qrs.router, prefix="/payment-qrs", tags=["paym
 api_router.include_router(media.router, prefix="/media", tags=["media"])
 api_router.include_router(operations.router, prefix="/operations", tags=["operations"])
 api_router.include_router(events.router, prefix="/events", tags=["events"])
+api_router.include_router(privacy.router, prefix="/privacy", tags=["privacy"])
 api_router.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
