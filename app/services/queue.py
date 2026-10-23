@@ -23,6 +23,7 @@ from app.core.clock import utcnow
 from app.core.config import settings
 from app.database import SessionLocal
 from app.models.job import FAILED, PENDING, RUNNING, SUCCEEDED, Job
+from app.services import storage
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,7 @@ def drain(limit: int = 50) -> int:
             ran += 1
         # Inline deployments have no worker loop to perform housekeeping.
         prune_finished(db)
+        storage.sweep_tombstones(db)
         return ran
     finally:
         db.close()
@@ -203,6 +205,7 @@ def work(stop: threading.Event, wake_event: threading.Event | None = None) -> No
                 release_stuck(db)
                 throttle.prune(db)
                 prune_finished(db)
+                storage.sweep_tombstones(db)
                 last_reap = time.monotonic()
 
             worked = run_once(db)

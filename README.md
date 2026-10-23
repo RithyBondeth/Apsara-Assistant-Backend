@@ -30,6 +30,7 @@ This repository is the FastAPI backend. The seller dashboard lives in [Apsara-As
 - **Dual currency (USD/KHR)** at each shop's own exchange rate.
 - **Seller alerts** sent to the seller's phone through Telegram, once per episode, in the seller's language.
 - **Products, variants, images, inventory, customers, and an operations suite** (purchasing and returns).
+- **Media in Postgres or any S3-compatible bucket** (`MEDIA_STORAGE`). Files stay behind the API, deletions are tracked by a database trigger, and `python -m app.scripts.move_media` moves existing files.
 - **Durable job queue** on PostgreSQL (`SKIP LOCKED`), run inline or as a separate worker.
 - **Security:** encrypted third-party credentials at rest, HttpOnly cookie sessions, OTP and password reset, sign-in throttling, and signed webhooks.
 - **Cost controls:** per-seller daily ceilings for AI replies, drafts, and receipt scans.
@@ -84,6 +85,7 @@ Every setting is documented in [`.env.example`](.env.example). The key ones:
 | `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_VISION_MODEL` | AI replies and receipt reading |
 | `META_APP_SECRET`, `META_VERIFY_TOKEN` | Facebook Messenger webhooks |
 | `JOB_RUNNER` | `inline`, or `worker` (run `python -m app.worker`) |
+| `MEDIA_STORAGE`, `S3_*` | `database`, or `s3` with a bucket for photos, QRs and attachments |
 | `AI_DAILY_REPLY_LIMIT`, `AI_DAILY_DRAFT_LIMIT`, `AI_DAILY_RECEIPT_LIMIT` | Per-seller daily AI spending ceilings |
 
 ### Running Tests

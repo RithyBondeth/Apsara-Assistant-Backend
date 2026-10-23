@@ -6,6 +6,7 @@ from sqlalchemy.orm import deferred, relationship
 
 from app.core.clock import utcnow
 from app.database import Base
+from app.models.storage_tombstone import track_deletions
 from app.services.media import public_media_url
 
 
@@ -29,7 +30,9 @@ class PaymentQr(Base):
     bank_name = Column(String(100))
     account_name = Column(String(100))
     currency = Column(String(3))
-    blob = deferred(Column(LargeBinary, nullable=False))
+    # One of the two holds the bytes — see app/services/storage.py.
+    blob = deferred(Column(LargeBinary))
+    storage_key = Column(String(512))
     content_type = Column(String(32), nullable=False)
     file_name = Column(String(255), nullable=False)
     file_size = Column(Integer, nullable=False)
@@ -43,3 +46,6 @@ class PaymentQr(Base):
     @property
     def url(self) -> str:
         return public_media_url("payment-qrs", self.id)
+
+
+track_deletions(PaymentQr.__table__)

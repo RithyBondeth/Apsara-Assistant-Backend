@@ -23,7 +23,7 @@ from app.schemas.product import (
 )
 from app.services.inventory import move_stock
 from app.services.alerts import evaluate_low_stock
-from app.services.media import MAX_PRODUCT_IMAGES, read_image_upload
+from app.services.media import MAX_PRODUCT_IMAGES, read_image_upload, store_or_503
 from app.services.variants import MAX_VARIANTS_PER_PRODUCT, clean_options, sync_product_totals
 
 router = APIRouter()
@@ -298,16 +298,17 @@ def upload_product_images(
 
     uploads = [read_image_upload(file) for file in files]
     for offset, (blob, content_type, file_name) in enumerate(uploads):
-        db.add(ProductImage(
+        image = ProductImage(
             user_id=current_user.id,
             product_id=product.id,
-            blob=blob,
             content_type=content_type,
             file_name=file_name,
             file_size=len(blob),
             position=len(existing) + offset,
             is_primary=not existing and offset == 0,
-        ))
+        )
+        store_or_503(image, "product-images", blob, content_type)
+        db.add(image)
     db.commit()
     return (
         db.query(ProductImage)

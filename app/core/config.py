@@ -78,6 +78,18 @@ class Settings(BaseSettings):
     # the only thing between a prank and a vision bill. 0 disables scanning.
     AI_DAILY_RECEIPT_LIMIT: int = 200
 
+    # Where media bytes are kept: "database" (Postgres bytea, the default) or
+    # "s3" for any S3-compatible bucket — AWS S3, Cloudflare R2, MinIO. The
+    # bucket can stay private; the API serves every object itself.
+    MEDIA_STORAGE: str = "database"
+    S3_BUCKET: str = ""
+    # Empty for AWS; e.g. https://<account>.r2.cloudflarestorage.com for R2.
+    S3_ENDPOINT_URL: str = ""
+    S3_REGION: str = ""
+    S3_ACCESS_KEY_ID: str = ""
+    S3_SECRET_ACCESS_KEY: str = ""
+    S3_KEY_PREFIX: str = "media"
+
     # Customer-supplied images are persisted so expiring platform URLs do not
     # destroy payment evidence. Bound each download before it reaches storage.
     MAX_ATTACHMENT_BYTES: int = 10_000_000
@@ -133,6 +145,14 @@ class Settings(BaseSettings):
                 "credentialed requests from any origin is not safe to deploy."
             )
         return ["*"]
+
+    def check_media_storage(self) -> None:
+        """Refuse to start half-configured: a missing bucket would only show
+        up as the first customer's receipt failing to save."""
+        if self.MEDIA_STORAGE.lower() == "s3" and not self.S3_BUCKET:
+            raise RuntimeError("MEDIA_STORAGE=s3 needs S3_BUCKET set.")
+        if self.MEDIA_STORAGE.lower() not in ("s3", "database"):
+            raise RuntimeError("MEDIA_STORAGE must be 'database' or 's3'.")
 
     model_config = SettingsConfigDict(env_file=".env")
 
