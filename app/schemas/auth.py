@@ -22,5 +22,13 @@ class OtpVerifyRequest(BaseModel):
     code: str = Field(min_length=6, max_length=6)
 
 
+class DeleteAccountRequest(BaseModel):
+    password: str = Field(min_length=1)
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str = Field(min_length=1)
+
+
 class MessageResponse(BaseModel):
     detail: str

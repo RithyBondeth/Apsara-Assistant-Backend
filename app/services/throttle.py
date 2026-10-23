@@ -21,6 +21,7 @@ old password a few times.
 
 import logging
 import secrets
+from datetime import timedelta
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -28,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.core.clock import utcnow
 from app.core.config import settings
 from app.models.login_attempt import LoginAttempt
+from app.models.signup_attempt import SignupAttempt
 
 logger = logging.getLogger(__name__)
 
@@ -126,5 +128,37 @@ def prune(db: Session) -> int:
         .filter(LoginAttempt.created_at <= cutoff)
         .delete(synchronize_session=False)
     )
+    removed += (
+        db.query(SignupAttempt)
+        .filter(SignupAttempt.created_at <= utcnow() - _signup_window())
+        .delete(synchronize_session=False)
+    )
     db.commit()
     return removed
+
+
+# ── Sign-up ──────────────────────────────────────────────────────────────────
+# Every account gets a daily AI allowance and sends a verification email, so
+# creating them in bulk costs money and mail reputation. Counted per client
+# address; skipped when the address is unknown, like the sign-in ceiling.
+
+def _signup_window():
+    return timedelta(minutes=settings.REGISTER_WINDOW_MINUTES)
+
+
+def too_many_signups(db: Session, ip: str | None) -> bool:
+    if not ip or settings.REGISTER_MAX_PER_IP <= 0:
+        return False
+    count = (db.query(func.count(SignupAttempt.id))
+             .filter(SignupAttempt.ip == ip,
+                     SignupAttempt.created_at > utcnow() - _signup_window())
+             .scalar() or 0)
+    if count >= settings.REGISTER_MAX_PER_IP:
+        logger.warning("Sign-up throttled for %s", ip)
+        return True
+    return False
+
+
+def record_signup(db: Session, ip: str | None) -> None:
+    """Counted with the account in the same commit, by the caller."""
+    db.add(SignupAttempt(ip=ip))

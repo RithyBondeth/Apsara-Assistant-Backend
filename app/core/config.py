@@ -120,6 +120,12 @@ class Settings(BaseSettings):
     # Railway use X-Real-IP, which its edge sets and a caller cannot add to.
     CLIENT_IP_HEADER: str = "X-Forwarded-For"
 
+    # Accounts one client address may create per window. 0 disables the cap.
+    REGISTER_MAX_PER_IP: int = 5
+    REGISTER_WINDOW_MINUTES: int = 60
+    # How long the link in a sign-up email works.
+    EMAIL_VERIFY_EXPIRE_HOURS: int = 48
+
     # Lifetimes for emailed codes.
     PASSWORD_RESET_EXPIRE_MINUTES: int = 30
     # An invite is opened when the new staff member next checks their mail,
