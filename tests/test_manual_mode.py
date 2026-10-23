@@ -190,3 +190,47 @@ def test_resume_due(mode, source, hours_quiet, expected):
                                 else utcnow() - timedelta(hours=hours_quiet)),
     )
     assert handoff.resume_due(conversation, User(manual_timeout_hours=12)) is expected
+
+
+# ── With a team ──────────────────────────────────────────────────────────────
+
+def test_a_staff_reply_is_theirs_and_expires_like_the_owners(client, seller, db):
+    from tests.test_staff import add_staff
+
+    staff = add_staff(client, seller)
+    staff_id = str(db.query(User).filter(User.email == staff.email).one().id)
+    integration = link(client, seller, db)
+    with wh.sends(), alerts(), ai.replies("Bat!"):
+        customer_says(client, integration, "do you have krama?", update_id=1)
+    conversation = the_conversation(client, seller)
+
+    seller_replies(client, staff, conversation["id"])
+    taken = the_conversation(client, seller)
+    assert taken["assigned_user_id"] == staff_id
+    assert taken["manual_mode_source"] == "reply"
+
+    # The shop's window applies, whoever answered.
+    went_quiet(db, conversation["id"], hours=13)
+    with wh.sends(), alerts(), ai.replies("Bat, mean nov ban!"):
+        customer_writes_again(client, integration, update_id=2)
+    resumed = the_conversation(client, seller)
+    assert resumed["handling_mode"] == "auto"
+    assert resumed["assigned_user_id"] is None
+
+
+def test_staff_take_over_in_their_own_name_but_cannot_change_the_window(client, seller, db):
+    from tests.test_staff import add_staff
+
+    staff = add_staff(client, seller)
+    staff_id = str(db.query(User).filter(User.email == staff.email).one().id)
+    conversation = seller.conversation()
+
+    r = client.patch(f"/api/v1/conversations/{conversation['id']}",
+                     json={"handling_mode": "manual"}, headers=staff.headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["assigned_user_id"] == staff_id
+    assert r.json()["manual_mode_source"] == "explicit"
+
+    refused = client.patch("/api/v1/auth/me", json={"manual_timeout_hours": 1},
+                           headers=staff.headers)
+    assert refused.status_code == 403

@@ -3,13 +3,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_owner
 from app.core.currency import CURRENCIES
 from app.database import get_db
 from app.models.payment_qr import PaymentQr
 from app.models.user import User
 from app.schemas.payment_qr import PaymentQrOut, PaymentQrUpdate
-from app.services.media import MAX_PAYMENT_QRS, read_image_upload
+from app.services.media import MAX_PAYMENT_QRS, read_image_upload, store_or_503
 
 router = APIRouter()
 
@@ -46,6 +46,7 @@ def create_payment_qr(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _owner: User = Depends(require_owner),
 ):
     _lock_user(db, current_user.id)
     existing = db.query(PaymentQr).filter(PaymentQr.user_id == current_user.id).all()
@@ -73,13 +74,13 @@ def create_payment_qr(
         bank_name=_clean_optional(bank_name),
         account_name=_clean_optional(account_name),
         currency=currency,
-        blob=blob,
         content_type=content_type,
         file_name=file_name,
         file_size=len(blob),
         is_active=True,
         is_default=make_default,
     )
+    store_or_503(qr, "payment-qrs", blob, content_type)
     db.add(qr)
     db.commit()
     db.refresh(qr)
@@ -92,6 +93,7 @@ def update_payment_qr(
     payload: PaymentQrUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _owner: User = Depends(require_owner),
 ):
     _lock_user(db, current_user.id)
     qrs = (
@@ -133,6 +135,7 @@ def delete_payment_qr(
     qr_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _owner: User = Depends(require_owner),
 ):
     _lock_user(db, current_user.id)
     qrs = (

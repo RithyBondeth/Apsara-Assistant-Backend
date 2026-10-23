@@ -11,16 +11,19 @@ picking up the same row.
 """
 
 import logging
+import threading
+import time
 from datetime import timedelta
 from typing import Callable
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.orm import Session
 
 from app.core.clock import utcnow
 from app.core.config import settings
 from app.database import SessionLocal
 from app.models.job import FAILED, PENDING, RUNNING, SUCCEEDED, Job
+from app.services import storage
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +38,27 @@ def register(kind: str):
     return decorator
 
 
-def enqueue(db: Session, kind: str, payload: dict, *, max_attempts: int = 5) -> Job:
-    """Persist a job. Committed by the caller alongside whatever prompted it."""
-    job = Job(kind=kind, payload=payload, max_attempts=max_attempts)
+def enqueue(db: Session, kind: str, payload: dict, *, max_attempts: int = 5,
+            run_after=None) -> Job:
+    """Persist a job. Committed by the caller alongside whatever prompted it.
+    `run_after` delays it — a poll scheduling its own next look."""
+    job = Job(kind=kind, payload=payload, max_attempts=max_attempts,
+              **({"run_after": run_after} if run_after is not None else {}))
     db.add(job)
+    # Woken on commit rather than now: until then the row is invisible to the
+    # drainer, which would find nothing and go back to sleep.
+    if not db.info.get(_WAKE_ON_COMMIT):
+        db.info[_WAKE_ON_COMMIT] = True
+        event.listen(db, "after_commit", _wake_after_commit, once=True)
     return job
+
+
+_WAKE_ON_COMMIT = "queue_wake_on_commit"
+
+
+def _wake_after_commit(session: Session) -> None:
+    session.info.pop(_WAKE_ON_COMMIT, None)
+    wake()
 
 
 def _backoff(attempts: int) -> timedelta:
@@ -125,6 +144,7 @@ def drain(limit: int = 50) -> int:
             ran += 1
         # Inline deployments have no worker loop to perform housekeeping.
         prune_finished(db)
+        storage.sweep_tombstones(db)
         return ran
     finally:
         db.close()
@@ -163,3 +183,81 @@ def prune_finished(db: Session) -> int:
     if deleted:
         logger.info("Pruned %s finished job(s)", deleted)
     return deleted
+
+
+# ── Running jobs ─────────────────────────────────────────────────────────────
+
+def work(stop: threading.Event, wake_event: threading.Event | None = None) -> None:
+    """Run jobs until `stop` is set. The loop behind both runners.
+
+    Idle, it waits up to JOB_POLL_SECONDS — less when `wake_event` is set by
+    a commit in the same process, so an inline deployment replies without
+    waiting out the poll.
+    """
+    # Imported here: throttle is housekeeping, not something the queue needs
+    # in order to be imported.
+    from app.services import throttle
+
+    last_reap = 0.0
+    while not stop.is_set():
+        db = SessionLocal()
+        try:
+            # Periodically return jobs left RUNNING by a process that died, and
+            # drop failed sign-ins too old to throttle anything.
+            if time.monotonic() - last_reap > settings.JOB_LEASE_SECONDS:
+                release_stuck(db)
+                throttle.prune(db)
+                prune_finished(db)
+                storage.sweep_tombstones(db)
+                last_reap = time.monotonic()
+
+            worked = run_once(db)
+        except Exception:
+            # A failure here is the loop itself, not a job — keep going rather
+            # than exiting and leaving the queue unattended.
+            logger.exception("Worker loop error")
+            worked = False
+        finally:
+            db.close()
+
+        if not worked:
+            (wake_event or stop).wait(settings.JOB_POLL_SECONDS)
+            if wake_event is not None:
+                wake_event.clear()
+
+
+# JOB_RUNNER=inline runs `work` on a thread of the API process. Not in the
+# request: a webhook answered only after its own OpenAI round trip — or after
+# everyone else's queued ahead of it — is a webhook the platform retries, and
+# a synchronous drain in async middleware stalls every other request with it.
+_stop = threading.Event()
+_wake = threading.Event()
+_drainer: threading.Thread | None = None
+
+
+def wake() -> None:
+    """Tell the in-process drainer there is work. Harmless when none runs."""
+    _wake.set()
+
+
+def start_drainer() -> None:
+    global _drainer
+    if _drainer is not None and _drainer.is_alive():
+        return
+    _stop.clear()
+    _drainer = threading.Thread(target=work, args=(_stop, _wake),
+                                name="job-drainer", daemon=True)
+    _drainer.start()
+    logger.info("In-process job drainer started")
+
+
+def stop_drainer(timeout: float = 10.0) -> None:
+    """Stop after the job in hand. One still running past `timeout` is left
+    to the lease: the thread is a daemon, and the row is released later."""
+    global _drainer
+    if _drainer is None:
+        return
+    _stop.set()
+    _wake.set()
+    _drainer.join(timeout)
+    _drainer = None

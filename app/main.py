@@ -1,6 +1,7 @@
 import logging
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,17 +12,35 @@ from app.core.config import settings
 from app.core.logging import configure as configure_logging
 from app.core.observability import configure as configure_error_tracking
 from app.database import SessionLocal
-from app.services.queue import drain
+from app.services import queue, realtime
 
 configure_logging(settings.LOG_LEVEL, settings.LOG_FORMAT)
 configure_error_tracking()
 
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    settings.check_media_storage()
+    # Small installations deliberately run without a separate worker; the
+    # API runs the queue on a thread of its own instead. Production
+    # deployments use JOB_RUNNER=worker and start nothing here.
+    if settings.JOB_RUNNER == "inline":
+        queue.start_drainer()
+    realtime.start()
+    try:
+        yield
+    finally:
+        realtime.stop()
+        queue.stop_drainer()
+
+
 app = FastAPI(
     title="Apsara Assistant API",
     description="AI Sales Assistant for Cambodian Businesses",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # Wildcard only where nothing real is served from. Credentialed requests from
@@ -47,12 +66,6 @@ async def request_context(request: Request, call_next):
     started = time.perf_counter()
 
     response = await call_next(request)
-
-    # Small installations deliberately run without a separate worker. Drain
-    # committed jobs here so stock alerts are still delivered automatically;
-    # production deployments use JOB_RUNNER=worker and skip this path.
-    if settings.JOB_RUNNER == "inline":
-        drain(limit=10)
 
     duration_ms = round((time.perf_counter() - started) * 1000, 1)
     response.headers["X-Request-ID"] = request_id

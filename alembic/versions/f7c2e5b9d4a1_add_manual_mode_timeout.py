@@ -1,7 +1,7 @@
 """add manual mode timeout
 
 Revision ID: f7c2e5b9d4a1
-Revises: e6b1d4f8a2c3
+Revises: f6b0d4e8a2c5
 """
 
 from alembic import op
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 
 
 revision = "f7c2e5b9d4a1"
-down_revision = "e6b1d4f8a2c3"
+down_revision = "f6b0d4e8a2c5"
 branch_labels = None
 depends_on = None
 

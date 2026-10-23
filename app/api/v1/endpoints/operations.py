@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.deps import get_current_user
+from app.api.deps import get_actor, get_current_user
 from app.core.clock import utcnow
 from app.database import get_db
 from app.models.operations import (LowStockAlert, PurchaseOrder, PurchaseOrderItem,
@@ -138,7 +138,8 @@ def update_purchase_order(po_id: UUID, payload: PurchaseOrderUpdate, db: Session
 
 @router.post("/purchase-orders/{po_id}/receive", response_model=PurchaseOrderOut)
 def receive_purchase(po_id: UUID, payload: ReceivePurchase, db: Session = Depends(get_db),
-                     current_user: User = Depends(get_current_user)):
+                     current_user: User = Depends(get_current_user),
+                     actor: User = Depends(get_actor)):
     po = _po(db, po_id, current_user.id, lock=True)
     if po.status not in {"ordered", "partially_received"}:
         raise HTTPException(409, "Only ordered purchase orders can be received")
@@ -158,7 +159,7 @@ def receive_purchase(po_id: UUID, payload: ReceivePurchase, db: Session = Depend
         variant = by_id.get(item.variant_id)
         if not variant: raise HTTPException(409, "A purchased variant no longer exists")
         move_stock(db, variant.product, variant, available_delta=quantity, kind="purchase_received",
-                   reason=f"Received purchase order {po.id}", actor_user_id=current_user.id,
+                   reason=f"Received purchase order {po.id}", actor_user_id=actor.id,
                    purchase_order_id=po.id)
         item.received_quantity += quantity
     complete = all(item.received_quantity == item.ordered_quantity for item in po.items)
@@ -215,7 +216,8 @@ def create_return(payload: ReturnCreate, db: Session = Depends(get_db),
 
 @router.post("/returns/{return_id}/receive", response_model=ReturnOut)
 def receive_return(return_id: UUID, db: Session = Depends(get_db),
-                   current_user: User = Depends(get_current_user)):
+                   current_user: User = Depends(get_current_user),
+                   actor: User = Depends(get_actor)):
     value = _return(db, return_id, current_user.id, lock=True)
     if value.received_at: raise HTTPException(409, "Return was already received")
     variant_ids = sorted({item.variant_id for item in value.items if item.restock_quantity}, key=str)
@@ -229,7 +231,7 @@ def receive_return(return_id: UUID, db: Session = Depends(get_db),
         if not variant: raise HTTPException(409, "A returned variant no longer exists")
         move_stock(db, variant.product, variant, available_delta=item.restock_quantity,
                    kind="return_received", reason=f"Restocked return {value.id}",
-                   actor_user_id=current_user.id, sales_return_id=value.id)
+                   actor_user_id=actor.id, sales_return_id=value.id)
     value.received_at = utcnow()
     value.status = "refunded" if value.refunded_at else "received"
     db.commit(); return _return(db, value.id, current_user.id)

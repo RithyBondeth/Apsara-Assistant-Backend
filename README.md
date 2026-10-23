@@ -1,228 +1,147 @@
-# Apsara Assistant — API
+<div align="center">
 
-FastAPI backend for an AI sales assistant aimed at Cambodian shops. Customers
-message a seller's Facebook Page or Telegram bot; the assistant answers from the
-seller's own product catalogue, in Khmer, English or romanized Khmer, and can
-take an order and a card payment without the seller being awake.
+# Apsara Assistant — Backend
 
-The web client lives in [`../Apsara-Assistant-Web`](../Apsara-Assistant-Web).
+**An AI sales assistant for Cambodian online sellers that answers customers, takes orders, and checks payments in Khmer and English.**
 
-## Requirements
+![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
+![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-D71F00?style=for-the-badge&logo=sqlalchemy&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=for-the-badge&logo=openai&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 
-- **Python 3.12** — the code uses `X | None` unions and `datetime` behaviour
-  that 3.9 does not have.
-- **PostgreSQL 16** — not swappable for SQLite. The models use the `postgresql`
-  UUID and JSONB dialects, `SELECT … FOR UPDATE SKIP LOCKED` for the job queue,
-  and `ON CONFLICT` for the reply quota.
+</div>
 
-## Getting started
+---
+
+## Overview
+
+Apsara Assistant is a multi-tenant sales assistant for Cambodian shops. Customers message a seller's Facebook Page or Telegram bot. The assistant answers from the seller's own catalogue and shop information in Khmer, English, or romanized Khmer, and it can draft an order and take a payment while the seller is away.
+
+This repository is the FastAPI backend. The seller dashboard lives in [Apsara-Assistant-Web](https://github.com/RithyBondeth/Apsara-Assistant-Web).
+
+## Features
+
+- **AI replies grounded in the shop.** The catalogue, prices, address, hours, delivery and policies are rendered into the prompt. When the model is unsure, it escalates to the seller instead of guessing.
+- **Large catalogues.** Up to 100 products are shown to the assistant in full. Beyond that, it sees the products the conversation is about (matched by name, including Khmer written without spaces, by description words, or by SKU) and then best sellers, with the rest listed by name only.
+- **Product photos in chat.** The assistant can send a product's primary photo when a customer asks to see it, using an id-checked marker in a single model round trip.
+- **Real-time inbox.** Postgres triggers `NOTIFY` on new messages and on conversation and order changes, delivered only on commit and across processes. Each API process holds one `LISTEN` connection and streams events to the browser over Server-Sent Events (`GET /api/v1/events`).
+- **Staff accounts.** The owner invites staff by email (a single-use, 72-hour password link). Staff work the same shop — inbox, orders, catalogue, inventory — under their own names, so assignments, notes, stock movements and payment confirmations record who acted. Channels, payment details, shop settings and the team stay owner-only.
+- **A reply pauses the assistant; it does not silence it.** Answering a customer takes the thread over until the shop has been quiet for `manual_timeout_hours` (default 12, 0 = never); pressing *Take over* stands until the thread is handed back.
+- **Unified inbox** for Facebook Messenger and Telegram, with idempotent message handling and a manual-mode takeover.
+- **Orders and payments.** AI order drafts, Stripe Checkout with each seller's own account, and payment-QR support for sellers who cannot use Stripe.
+- **Order updates to the customer.** Confirmed, shipped, delivered, cancelled and paid each send the customer one message in their thread, in Khmer or English. Each is sent once, can be skipped per change (`notify_customer: false`), and can be turned off per shop (`customer_updates_enabled`).
+- **Dynamic KHQR with Bakong confirmation.** Each order can get a KHQR for its exact amount and currency. The assistant sends it in place of the static QR when an order is awaiting payment, and the order is marked paid as soon as Bakong reports the transaction (checked by the MD5 of the code).
+- **Receipt verification.** A vision model reads customer receipt photos and returns a verdict against the order: `match`, `amount_mismatch`, `duplicate`, and others.
+- **Dual currency (USD/KHR)** at each shop's own exchange rate.
+- **Seller alerts** sent to the seller's phone through Telegram, once per episode, in the seller's language.
+- **Products, variants, images, inventory, customers, and an operations suite** (purchasing and returns).
+- **Media in Postgres or any S3-compatible bucket** (`MEDIA_STORAGE`). Files stay behind the API, deletions are tracked by a database trigger, and `python -m app.scripts.move_media` moves existing files.
+- **Durable job queue** on PostgreSQL (`SKIP LOCKED`), run inline or as a separate worker.
+- **Privacy.** A shop owner can delete the account and everything in it (`POST /auth/delete-account`, password required). Meta's data-deletion callback is at `POST /api/v1/privacy/meta-data-deletion`: it erases the person's chats and personal details from every shop while keeping the shops' sales records, and answers with a confirmation code the person can look up.
+- **Security:** encrypted third-party credentials at rest, HttpOnly cookie sessions, email confirmation before password sign-in, a per-address cap on sign-ups, OTP and password reset, sign-in throttling, and signed webhooks.
+- **Cost controls:** per-seller daily ceilings for AI replies, drafts, and receipt scans.
+- **Observability:** structured logs, request IDs, optional Sentry, and liveness and readiness probes.
+
+## Tech Stack
+
+| Area | Technology |
+| --- | --- |
+| Language | Python 3.12 |
+| Framework | FastAPI, Uvicorn |
+| Database | PostgreSQL 16, SQLAlchemy, Alembic |
+| AI | OpenAI (chat and vision models) |
+| Integrations | Facebook Messenger, Telegram Bot API, Stripe Checkout, SMTP |
+| Infrastructure | Docker, Docker Compose, GitHub Actions CI |
+| Testing | Pytest against a real PostgreSQL database |
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.12
+- PostgreSQL 16. SQLite is not supported, because the models use the UUID and JSONB types, `SKIP LOCKED`, and `ON CONFLICT`.
+- Optional: Docker
+
+### Installation
 
 ```bash
+git clone https://github.com/RithyBondeth/Apsara-Assistant-Backend.git
+cd Apsara-Assistant-Backend
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-cp .env.example .env
-```
-
-Edit `.env` — `DATABASE_URL` and `SECRET_KEY` are the only two with no usable
-default. Then create the schema and run it:
-
-```bash
+cp .env.example .env          # set DATABASE_URL and SECRET_KEY
 createdb apsara_db
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-Interactive API docs are at `http://localhost:8000/docs`.
+Interactive API docs are served at [http://localhost:8000/docs](http://localhost:8000/docs).
 
-Everything else is optional and degrades quietly: with no `OPENAI_API_KEY` the
-assistant endpoints return a clear error rather than failing at import; with no
-`SMTP_HOST`, password-reset and OTP mail is written to the log instead of sent,
-so local development needs no mail account.
+**With Docker:** `./dev-up.sh` starts PostgreSQL, applies migrations, and runs the API with its worker. Add `-d` to run it in the background.
 
-### With Docker instead
+### Environment Variables
 
-Start PostgreSQL, apply migrations, and run the API plus its background worker
-with one command:
+Every setting is documented in [`.env.example`](.env.example). The key ones:
 
-```bash
-./dev-up.sh
-```
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `SECRET_KEY` | Signs tokens and derives the credential-encryption key |
+| `CORS_ORIGINS` | Allowed web origins (required outside development) |
+| `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_VISION_MODEL` | AI replies and receipt reading |
+| `META_APP_SECRET`, `META_VERIFY_TOKEN` | Facebook Messenger webhooks |
+| `JOB_RUNNER` | `inline`, or `worker` (run `python -m app.worker`) |
+| `BAKONG_API_URL`, `BAKONG_API_TOKEN` | Bakong Open API for KHQR payment checks (Cambodian IPs only; use a relay when hosted abroad) |
+| `MEDIA_STORAGE`, `S3_*` | `database`, or `s3` with a bucket for photos, QRs and attachments |
+| `AI_DAILY_REPLY_LIMIT`, `AI_DAILY_DRAFT_LIMIT`, `AI_DAILY_RECEIPT_LIMIT` | Per-seller daily AI spending ceilings |
 
-The script reads `.env`, checks that Docker and `SECRET_KEY` are available, and
-preserves database data in the `apsara-db` Docker volume. Pass `-d` to run in
-the background:
-
-```bash
-./dev-up.sh -d
-```
-
-Stop a background stack with `docker compose down`. This removes the
-containers but keeps the database volume. To provide configuration from the
-shell instead of `.env`, environment variables still work as normal, for
-example `SECRET_KEY=dev-secret ./dev-up.sh`.
-
-## Tests
-
-```bash
-pytest
-```
-
-The suite runs against a **real Postgres**, not an in-memory stand-in, for the
-dialect reasons above. It uses `TEST_DATABASE_URL` (default
-`postgresql://localhost:5432/apsara_test_db`) and wipes that database
-repeatedly — point it at a throwaway one.
+### Running Tests
 
 ```bash
 createdb apsara_test_db
+pytest
 ```
 
-## How it fits together
+## Project Structure
 
-```
-app/
-  api/v1/endpoints/   HTTP surface — auth, products, customers, orders,
-                      conversations, chat, integrations, webhooks
-  services/           the parts with actual behaviour:
-                        ai_service      prompt building and the OpenAI call
-                        inbound         turning a webhook into a reply
-                        platforms       Messenger and Telegram
-                        stripe_gateway  card payments
-                        queue           durable jobs on Postgres
-                        quota           daily reply ceiling
-                        throttle        sign-in rate limiting
-                        verification    password-reset and OTP codes
-                        seller_alerts   Telegram alerts to the seller's own phone
-                        receipts        reading a customer's receipt, and judging it
-                        handoff         when a thread is the seller's, and when it is not
-                        telegram_link   linking the seller's Telegram without a chat id
-  models/             SQLAlchemy tables
-  core/               config, security, crypto, clock, logging
-alembic/versions/     migrations
+```text
+Apsara-Assistant-Backend/
+├── app/
+│   ├── api/v1/endpoints/   # auth, products, customers, orders, conversations, chat,
+│   │                       # inventory, operations, integrations, payment QRs, webhooks
+│   ├── services/           # AI, inbound messages, platforms, Stripe, queue, quotas,
+│   │                       # receipts, seller alerts, verification
+│   ├── models/             # SQLAlchemy models
+│   ├── schemas/            # Pydantic schemas
+│   ├── core/               # config, security, crypto, clock, logging, observability
+│   ├── main.py
+│   └── worker.py           # Background job worker
+├── alembic/                # Database migrations
+├── docs/                   # Channel connection guide
+├── tests/
+├── Dockerfile
+└── docker-compose.yml
 ```
 
-A few decisions worth knowing before changing things:
+## Documentation
 
-**Every query is scoped to the signed-in seller.** This is a multi-tenant
-database with no row-level security behind it, so `user_id == current_user.id`
-in the query *is* the isolation. A new endpoint that forgets it leaks another
-shop's data.
+- [Connecting Messenger and Telegram channels](docs/connecting-channels.md)
+- Health checks: `GET /health` (liveness) and `GET /health/ready` (readiness)
 
-**Inbound work is queued, not done in the request.** A webhook that does not get
-a prompt 2xx is retried, sometimes for hours, and the work behind one includes an
-OpenAI round trip. `enqueue` writes a row, and the row is what survives a
-restart. `JOB_RUNNER=inline` drains it in the web process (fine for one
-process); `JOB_RUNNER=worker` leaves it to `python -m app.worker`.
+## Related Repositories
 
-**Third-party credentials are encrypted at rest** (`app/core/crypto.py`). A
-stored page token, bot token or Stripe key is a live credential for someone
-else's account. The key derives from `SECRET_KEY` unless `PLATFORM_TOKEN_KEY` is
-set — meaning rotating `SECRET_KEY` alone makes stored tokens unreadable and
-sellers must reconnect.
+- [Apsara-Assistant-Web](https://github.com/RithyBondeth/Apsara-Assistant-Web): the seller dashboard and landing page
 
-**Timestamps go through `app/core/clock.py`.** The columns are naive
-`TIMESTAMP WITHOUT TIME ZONE` holding UTC; `utcnow()` matches that. Don't reach
-for `datetime.now(timezone.utc)` — comparing an aware value against these
-columns raises.
+## Author
 
-**The assistant knows the shop, not just the catalogue.** `shop_address`,
-`shop_hours`, `delivery_info` and `shop_policies` on the seller are rendered
-into the system prompt as a SHOP INFORMATION section. Without them the model
-is told not to guess at delivery fees or policies — it says it will check with
-the seller, and ends the reply with `[NEEDS_SELLER]` so the seller is told.
+**Rithy Bondeth** — Full Stack Developer & AI Engineer
 
-**The seller is alerted on their phone, once per episode.** When the assistant
-escalates, cannot answer, or a thread is in manual mode, the conversation's
-`needs_attention_at` is set and a `seller_alert` job is queued; a receipt
-photo on an unpaid order and a Stripe payment queue their own. Only the
-transition from unset raises an alert, and a seller reply (or closing the
-thread) clears it, so a customer sending five messages overnight is one
-notification. Delivery is through the seller's own Telegram bot to the chat
-recorded by the link flow (`POST /auth/telegram-link` → the seller opens
-`t.me/<bot>?start=<code>` → the webhook records the chat), in the language the
-seller uses in the web app. `attention_telegram_enabled` and
-`payment_telegram_enabled` are the two switches.
+[![Portfolio](https://img.shields.io/badge/Portfolio-0A0A0A?style=for-the-badge&logo=vercel&logoColor=white)](https://bondeth.dev)
+[![GitHub](https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/RithyBondeth)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/rithy-bondeth-484073282/)
 
-**Receipts are read before the seller is told.** A customer's photo on an
-unpaid order goes to a vision model (`OPENAI_VISION_MODEL`) that returns the
-amount, currency and transaction reference as strict JSON. `receipts.assess`
-turns that into one verdict against the order — `match`, `amount_mismatch`,
-`currency_differs`, `duplicate` (the same reference was already sent to this
-seller, for any order), `not_a_receipt`, `unreadable` — and the Telegram
-alert carries it. The reading is advice: confirming stays the seller's tap,
-and `POST /orders/{id}/receipts/{attachment_id}/scan` re-reads on demand.
-Scans have their own daily ceiling, `AI_DAILY_RECEIPT_LIMIT`, because the
-customer decides how many photos arrive.
+## License
 
-**Both currencies, at the shop's own rate.** Cambodia is bimonetary: a shop
-prices in one currency and customers pay in either. `users.khr_rate` (default
-4,100) is what the catalogue is rendered with in the prompt — every price
-reaches the model already written as "4.00 USD (16,400 KHR)", so it copies
-rather than converts — and what a receipt read in the other currency is
-compared at, within `receipts.RATE_TOLERANCE` (3%), since banks apply their
-own rate. Confirming records `orders.paid_amount` / `paid_currency`: a riel
-payment on a dollar order is a fact the books need.
-
-**A reply pauses the assistant; it does not silence it.** Answering a
-customer takes the thread over implicitly (`manual_mode_source = "reply"`),
-and the assistant picks it back up once the seller has been quiet for
-`users.manual_timeout_hours` (default 12, 0 = never). Pressing *Take over* is
-explicit and stands until the thread is handed back. Without the expiry, a
-shop that answered ten customers on Monday had ten threads the assistant
-would not touch on Tuesday, with nothing on screen saying why. The check runs
-on the next inbound message, in `app/services/handoff.py`.
-
-**Webhooks prove who is calling.** They are the only unauthenticated endpoints:
-Messenger by an app-level signature over the raw body, Telegram by a
-per-connection secret header, Stripe by its signature over the raw body. They
-answer 200 to anything they cannot use, because a 4xx buys a retry storm rather
-than a fix.
-
-## Integrations
-
-Connecting a Page or bot is documented step by step in
-[`docs/connecting-channels.md`](docs/connecting-channels.md), including the
-tunnel needed to receive webhooks locally.
-
-### Payments
-
-Card payments go through **Stripe Checkout**, with each seller connecting their
-own Stripe account under Integrations. Calls are made with that seller's key, so
-money moves from the customer to the seller and never through this platform.
-The seller supplies two things: a secret key (a restricted key with write access
-to Checkout Sessions is enough) and the signing secret of a webhook endpoint
-they add in Stripe pointing at `/api/v1/webhooks/stripe/{connection_id}`,
-subscribed to `checkout.session.completed`.
-
-An order is only marked paid by that webhook. The customer landing back on a
-success URL proves nothing — it can be visited directly and does not happen at
-all if they close the tab.
-
-> **Stripe is not available to businesses based in Cambodia.** Sellers who
-> cannot onboard there use the payment-QR flow instead (`payment_qr_url` on the
-> seller). Both are supported; neither is required.
-
-## Configuration
-
-Every setting, with comments, is in [`.env.example`](.env.example). The ones
-that bite:
-
-| Setting | Why it matters |
-| --- | --- |
-| `SECRET_KEY` | Signs tokens, keys the OTP hash, and derives the credential-encryption key. Rotating it invalidates stored platform tokens. |
-| `CORS_ORIGINS` | Required outside development — the app refuses to start rather than allow credentialed requests from any origin. |
-| `TRUST_PROXY_HEADERS` | Leave false unless a proxy you control sets `X-Forwarded-For`. If nothing strips an inbound header, a caller can forge it and step around the per-address sign-in limit. |
-| `JOB_RUNNER` | `inline` or `worker`. With `worker`, something must actually run `python -m app.worker`, or queued replies are never sent. |
-| `AI_DAILY_REPLY_LIMIT` | Inbound volume is not ours to control; this is the ceiling on OpenAI spend per seller per day. |
-| `AI_DAILY_DRAFT_LIMIT` | Separate daily ceiling for seller-triggered AI order proposals. |
-| `manual_timeout_hours` (per seller, not env) | Hours of seller silence before the assistant resumes a thread they replied to. 0 restores the old behaviour, where only *Return to Apsara* brings it back. |
-| `AI_DAILY_RECEIPT_LIMIT` | Receipt scans per seller per day; 0 turns scanning off. Customers choose how many photos to send, so this is the only cap on vision spend. |
-| `APP_BASE_URL` | Seller alerts link straight into the inbox (`/chat?conversation=…`) and an order (`/orders?order=…`); a wrong value sends the seller to the wrong site. |
-
-## Operational endpoints
-
-- `GET /health` — liveness. Deliberately does not touch the database, so a
-  database blip cannot take every instance out at once.
-- `GET /health/ready` — readiness. Returns 503 when Postgres is unreachable.
-
-Every response carries an `X-Request-ID`, honouring an inbound one so a trace
-started at a proxy or in the web app carries through.
+Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.

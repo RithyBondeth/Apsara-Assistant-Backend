@@ -57,6 +57,7 @@ class ConversationOut(BaseModel):
     handling_mode: str
     manual_mode_source: str | None = None
     assigned_user_id: UUID | None
+    assigned_user_name: str | None = None
     unread_count: int
     needs_attention_at: datetime | None = None
     last_read_at: datetime | None

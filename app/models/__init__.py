@@ -11,9 +11,12 @@ from app.models.platform_connection import PlatformConnection
 from app.models.job import Job
 from app.models.ai_usage import AiUsage
 from app.models.login_attempt import LoginAttempt
+from app.models.signup_attempt import SignupAttempt
+from app.models.data_deletion_request import DataDeletionRequest
 from app.models.inventory_movement import InventoryMovement
 from app.models.product_image import ProductImage
 from app.models.payment_qr import PaymentQr
+from app.models.storage_tombstone import StorageTombstone
 from app.models.product_variant import ProductVariant
 from app.models.operations import LowStockAlert, Supplier, PurchaseOrder, PurchaseOrderItem, SalesReturn, SalesReturnItem
 
@@ -33,9 +36,12 @@ __all__ = [
     "Job",
     "AiUsage",
     "LoginAttempt",
+    "SignupAttempt",
+    "DataDeletionRequest",
     "InventoryMovement",
     "ProductImage",
     "PaymentQr",
+    "StorageTombstone",
     "ProductVariant",
     "LowStockAlert", "Supplier", "PurchaseOrder", "PurchaseOrderItem", "SalesReturn", "SalesReturnItem",
 ]

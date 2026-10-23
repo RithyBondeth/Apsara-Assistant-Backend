@@ -21,6 +21,7 @@ old password a few times.
 
 import logging
 import secrets
+from datetime import timedelta
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -28,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.core.clock import utcnow
 from app.core.config import settings
 from app.models.login_attempt import LoginAttempt
+from app.models.signup_attempt import SignupAttempt
 
 logger = logging.getLogger(__name__)
 
@@ -43,16 +45,20 @@ def normalise(email: str) -> str:
 def client_ip(request) -> str | None:
     """The caller's address, as far as it can be trusted.
 
-    X-Forwarded-For is only read when TRUST_PROXY_HEADERS says a proxy is in
+    A proxy header is only read when TRUST_PROXY_HEADERS says a proxy is in
     front and setting it. Reading it unconditionally would be worse than not
     having an IP ceiling at all: any caller could put a fresh value in the
     header on every request and never be counted twice.
+
+    Even behind a trusted proxy, only the part the proxy wrote can be believed.
+    X-Forwarded-For is appended to, not replaced, so its left-most entry is
+    whatever the caller sent — the right-most is the address our proxy saw.
+    A header the proxy overwrites outright (Railway's X-Real-IP) is read whole.
     """
     if settings.TRUST_PROXY_HEADERS:
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            # Left-most entry is the original client; the rest are proxies.
-            return forwarded.split(",")[0].strip() or None
+        value = request.headers.get(settings.CLIENT_IP_HEADER)
+        if value:
+            return value.split(",")[-1].strip() or None
     return request.client.host if request.client else None
 
 
@@ -122,5 +128,37 @@ def prune(db: Session) -> int:
         .filter(LoginAttempt.created_at <= cutoff)
         .delete(synchronize_session=False)
     )
+    removed += (
+        db.query(SignupAttempt)
+        .filter(SignupAttempt.created_at <= utcnow() - _signup_window())
+        .delete(synchronize_session=False)
+    )
     db.commit()
     return removed
+
+
+# ── Sign-up ──────────────────────────────────────────────────────────────────
+# Every account gets a daily AI allowance and sends a verification email, so
+# creating them in bulk costs money and mail reputation. Counted per client
+# address; skipped when the address is unknown, like the sign-in ceiling.
+
+def _signup_window():
+    return timedelta(minutes=settings.REGISTER_WINDOW_MINUTES)
+
+
+def too_many_signups(db: Session, ip: str | None) -> bool:
+    if not ip or settings.REGISTER_MAX_PER_IP <= 0:
+        return False
+    count = (db.query(func.count(SignupAttempt.id))
+             .filter(SignupAttempt.ip == ip,
+                     SignupAttempt.created_at > utcnow() - _signup_window())
+             .scalar() or 0)
+    if count >= settings.REGISTER_MAX_PER_IP:
+        logger.warning("Sign-up throttled for %s", ip)
+        return True
+    return False
+
+
+def record_signup(db: Session, ip: str | None) -> None:
+    """Counted with the account in the same commit, by the caller."""
+    db.add(SignupAttempt(ip=ip))

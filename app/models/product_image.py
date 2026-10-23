@@ -6,6 +6,7 @@ from sqlalchemy.orm import deferred, relationship
 
 from app.core.clock import utcnow
 from app.database import Base
+from app.models.storage_tombstone import track_deletions
 from app.services.media import public_media_url
 
 
@@ -34,7 +35,9 @@ class ProductImage(Base):
         nullable=True,
         index=True,
     )
-    blob = deferred(Column(LargeBinary, nullable=False))
+    # One of the two holds the bytes — see app/services/storage.py.
+    blob = deferred(Column(LargeBinary))
+    storage_key = Column(String(512))
     content_type = Column(String(32), nullable=False)
     file_name = Column(String(255), nullable=False)
     file_size = Column(Integer, nullable=False)
@@ -48,3 +51,6 @@ class ProductImage(Base):
     @property
     def url(self) -> str:
         return public_media_url("product-images", self.id)
+
+
+track_deletions(ProductImage.__table__)

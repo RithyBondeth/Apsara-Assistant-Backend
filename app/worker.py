@@ -8,18 +8,18 @@ are claimed with SKIP LOCKED, so they will not collide.
 
 import logging
 import signal
-import time
+import threading
 
 from app.core.config import settings
-from app.database import SessionLocal
 
 # Importing for the side effect of registering the handlers on the queue.
 from app.services import inbound  # noqa: F401
 from app.services import alerts  # noqa: F401
 from app.services import seller_alerts  # noqa: F401
 from app.services import receipts  # noqa: F401
-from app.services import throttle
-from app.services.queue import prune_finished, release_stuck, run_once
+from app.services import customer_updates  # noqa: F401
+from app.services import khqr_orders  # noqa: F401
+from app.services.queue import work
 
 from app.core.logging import configure as configure_logging
 from app.core.observability import configure as configure_error_tracking
@@ -30,46 +30,22 @@ configure_error_tracking()
 
 logger = logging.getLogger("app.worker")
 
-_running = True
+_stop = threading.Event()
 
 
-def _stop(signum, _frame):
+def _on_signal(signum, _frame):
     """Finish the job in hand rather than abandoning it mid-flight."""
-    global _running
     logger.info("Signal %s received; stopping after the current job", signum)
-    _running = False
+    _stop.set()
 
 
 def main() -> None:
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
+    settings.check_media_storage()
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
 
     logger.info("Worker started; polling every %ss", settings.JOB_POLL_SECONDS)
-    last_reap = 0.0
-
-    while _running:
-        db = SessionLocal()
-        try:
-            # Periodically return jobs left RUNNING by a process that died, and
-            # drop failed sign-ins too old to throttle anything.
-            if time.monotonic() - last_reap > settings.JOB_LEASE_SECONDS:
-                release_stuck(db)
-                throttle.prune(db)
-                prune_finished(db)
-                last_reap = time.monotonic()
-
-            worked = run_once(db)
-        except Exception:
-            # A failure here is the loop itself, not a job — keep going rather
-            # than exiting and leaving the queue unattended.
-            logger.exception("Worker loop error")
-            worked = False
-        finally:
-            db.close()
-
-        if not worked:
-            time.sleep(settings.JOB_POLL_SECONDS)
-
+    work(_stop)
     logger.info("Worker stopped")
 
 

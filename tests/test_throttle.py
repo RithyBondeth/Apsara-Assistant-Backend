@@ -139,10 +139,44 @@ def test_forwarded_headers_are_used_when_proxies_are_trusted(monkeypatch):
     monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", True)
 
     class Request:
-        headers = {"X-Forwarded-For": "1.2.3.4, 10.0.0.9"}
+        headers = {"X-Forwarded-For": "1.2.3.4"}
         client = type("C", (), {"host": "10.0.0.1"})()
 
     assert throttle.client_ip(Request()) == "1.2.3.4"
+
+
+def test_a_forged_forwarded_entry_does_not_hide_the_caller(monkeypatch):
+    """The proxy appends what it saw; anything to the left came from the
+    caller, who could otherwise claim a new address on every guess."""
+    monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", True)
+
+    class Request:
+        headers = {"X-Forwarded-For": "6.6.6.6, 203.0.113.7"}
+        client = type("C", (), {"host": "10.0.0.1"})()
+
+    assert throttle.client_ip(Request()) == "203.0.113.7"
+
+
+def test_a_proxy_that_overwrites_its_own_header_is_read_whole(monkeypatch):
+    monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", True)
+    monkeypatch.setattr(settings, "CLIENT_IP_HEADER", "X-Real-IP")
+
+    class Request:
+        headers = {"X-Real-IP": "203.0.113.7", "X-Forwarded-For": "6.6.6.6"}
+        client = type("C", (), {"host": "10.0.0.1"})()
+
+    assert throttle.client_ip(Request()) == "203.0.113.7"
+
+
+def test_a_trusted_proxy_that_sent_no_header_falls_back_to_the_socket(monkeypatch):
+    monkeypatch.setattr(settings, "TRUST_PROXY_HEADERS", True)
+    monkeypatch.setattr(settings, "CLIENT_IP_HEADER", "X-Real-IP")
+
+    class Request:
+        headers = {}
+        client = type("C", (), {"host": "10.0.0.1"})()
+
+    assert throttle.client_ip(Request()) == "10.0.0.1"
 
 
 def test_prune_drops_only_attempts_past_the_window(db):

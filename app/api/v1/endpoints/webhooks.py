@@ -13,7 +13,7 @@ import dataclasses
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from app.core.clock import utcnow
@@ -22,10 +22,10 @@ from app.database import get_db
 from app.models.customer import Customer
 from app.models.order import PAID, Order
 from app.models.platform_connection import PlatformConnection
-from app.services import platforms, stripe_gateway, telegram_link
+from app.services import customer_updates, platforms, stripe_gateway, telegram_link
 from app.services.seller_alerts import alert_paid
 from app.services.inbound import INBOUND_MESSAGE
-from app.services.queue import drain, enqueue
+from app.services.queue import enqueue
 
 logger = logging.getLogger(__name__)
 
@@ -34,21 +34,18 @@ router = APIRouter()
 ACK = {"status": "received"}
 
 
-def _queue(db: Session, background: BackgroundTasks, connection_id, message) -> None:
-    """Persist the work, then nudge it along.
+def _queue(db: Session, connection_id, message) -> None:
+    """Persist the work and return; the reply happens after the platform has
+    its 200.
 
-    The row is what makes this durable; the background nudge is only so a
-    single-process deployment needs no separate worker. If the process dies
-    before or during the nudge, the job is still on the queue for a worker — or
-    the next restart — to pick up.
+    The row is what makes this durable. Committing it wakes the in-process
+    drainer when there is one; otherwise a worker picks it up.
     """
     enqueue(db, INBOUND_MESSAGE, {
         "connection_id": str(connection_id),
         "message": dataclasses.asdict(message),
     })
     db.commit()
-    if settings.JOB_RUNNER == "inline":
-        background.add_task(drain, 5)
 
 
 # ── Facebook Messenger ───────────────────────────────────────────────────────
@@ -68,7 +65,6 @@ def verify_messenger_subscription(request: Request):
 @router.post("/messenger")
 async def receive_messenger_event(
     request: Request,
-    background: BackgroundTasks,
     db: Session = Depends(get_db),
     x_hub_signature_256: str | None = Header(default=None),
 ):
@@ -96,7 +92,7 @@ async def receive_messenger_event(
             continue
 
         for message in messages:
-            _queue(db, background, connection.id, message)
+            _queue(db, connection.id, message)
 
     return ACK
 
@@ -107,7 +103,6 @@ async def receive_messenger_event(
 async def receive_telegram_update(
     connection_id: UUID,
     request: Request,
-    background: BackgroundTasks,
     db: Session = Depends(get_db),
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ):
@@ -136,7 +131,7 @@ async def receive_telegram_update(
         # The seller opening the link from Settings, not a customer.
         return ACK
     if message:
-        _queue(db, background, connection.id, message)
+        _queue(db, connection.id, message)
 
     return ACK
 
@@ -212,11 +207,10 @@ async def receive_stripe_event(
         order.reservation_expires_at = None
         customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
         alert_paid(db, order, customer.name if customer else "")
+        customer_updates.notify(db, order, customer_updates.PAID)
         db.commit()
         logger.info("Order %s marked paid from Stripe session %s",
                     order.id, session.get("id"))
-        if settings.JOB_RUNNER == "inline":
-            drain(5)
 
     return ACK
 

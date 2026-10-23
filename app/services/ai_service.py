@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from decimal import Decimal
 from functools import lru_cache
 from uuid import UUID
@@ -23,9 +24,9 @@ logger = logging.getLogger(__name__)
 # lean on earlier turns ("how much for two?") still resolve.
 HISTORY_LIMIT = 20
 
-# Catalogue rows in the prompt. A seller past this many products needs retrieval
-# rather than a full dump; until then the whole catalogue fits comfortably.
-CATALOGUE_LIMIT = 100
+# Products rendered in full. Past this many, app/services/catalogue.py picks
+# the ones the conversation is about and lists the rest by name.
+from app.services.catalogue import CATALOGUE_LIMIT  # noqa: E402
 CATALOGUE_VARIANT_LIMIT = 300
 
 # A message the seller typed by hand is, to the customer, the same voice as the
@@ -43,6 +44,12 @@ PAYMENT_QR_MARKER = "[SEND_PAYMENT_QR]"
 # QR marker: one round trip, and nothing a customer could type by accident.
 # The seller gets a Telegram alert; the customer only ever sees the apology.
 NEEDS_SELLER_MARKER = "[NEEDS_SELLER]"
+
+# How the model sends a product's photo: the product's id in a marker, same
+# reasoning as the two above. Only ids of products rendered in the prompt are
+# honoured, so a guessed or quoted id can never send another shop's image.
+PHOTO_MARKER = re.compile(r"\[SEND_PHOTO:([0-9a-fA-F-]{36})\]")
+MAX_PHOTOS_PER_REPLY = 3
 
 
 class AIError(RuntimeError):
@@ -80,10 +87,14 @@ def _client() -> OpenAI:
 
 # ── System prompt builder ─────────────────────────────────────────────────────
 
-def build_system_prompt(user: User, products: list[Product]) -> str:
+def build_system_prompt(user: User, products: list[Product], *,
+                        catalogue_note: str = "") -> str:
+    """The system prompt. `catalogue_note` is what to say about products not
+    rendered in full — see catalogue.name_index_section."""
     business = user.business_name or user.full_name
     currency = user.currency or DEFAULT_CURRENCY
-    payment_qr = default_payment_qr_url(user)
+    payment_qr = default_payment_qr_url(user) or (
+        user.khqr_enabled and user.bakong_account_id)
 
     # Every price is rendered in both currencies at the shop's rate, so the
     # model copies rather than converts — arithmetic is where it slips.
@@ -112,6 +123,8 @@ def build_system_prompt(user: User, products: list[Product]) -> str:
         )
         if p.description:
             line += f"\n  {p.description}"
+        if product_photo_url(p):
+            line += f"\n  Photo available: [SEND_PHOTO:{p.id}]"
         if single_default:
             variant = active_variants[0]
             line += f"\n  {'OUT OF STOCK' if not variant.stock else f'Stock: {variant.stock} units'}"
@@ -160,6 +173,19 @@ then the QR image.
   will check the transfer and confirm
 """ if payment_qr else ""
 
+    photo_section = f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PRODUCT PHOTOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Products marked "Photo available" have a photo you can send. To send one,
+end your reply with that product's marker exactly as written, on its own line.
+The customer receives your message and then the photo.
+- Send a photo when the customer asks to see a product, or when showing it
+  would clearly help them decide
+- At most {MAX_PHOTOS_PER_REPLY} photos in one reply, and do not resend a photo they already have
+- Never mention or describe the marker itself to the customer
+""" if any(product_photo_url(p) for p in products[:CATALOGUE_LIMIT]) else ""
+
     other = other_currency(currency)
     rate = f"{Decimal(user.khr_rate or 4100):,.0f}"
     example = money(Decimal("10") if currency == "USD" else Decimal("40000"))
@@ -176,7 +202,7 @@ Your role:
 PRODUCT CATALOG
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {product_catalog}
-{shop_section}
+{catalogue_note}{shop_section}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 LANGUAGE RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -189,7 +215,7 @@ message from the message itself:
   not convert it to Khmer script or answer in English.
 - If the customer mixes languages, mirror the mix.
 Never switch the customer to a different language than the one they chose.
-{payment_section}
+{payment_section}{photo_section}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BEHAVIOR RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -285,6 +311,51 @@ def _split_marker(reply: str, marker: str) -> tuple[str, bool]:
     if marker not in reply:
         return reply, False
     return reply.replace(marker, "").strip(), True
+
+
+def product_photo_url(product: Product) -> str | None:
+    """The public URL of the photo a customer is sent for this product: its
+    primary gallery image, else the first, else a legacy image link."""
+    images = list(product.images or [])
+    primary = next((image for image in images if image.is_primary), None) or \
+        (images[0] if images else None)
+    if primary is not None:
+        return primary.url
+    return product.image_url or None
+
+
+def split_photos(reply: str, products: list[Product]) -> tuple[str, list[tuple[Product, str]]]:
+    """Separate the reply from the photos the model asked to send.
+
+    Returns the cleaned text and (product, url) pairs, in the order asked,
+    deduplicated and capped. An id that is not one of `products` — the ones
+    the model was shown — or a product without a photo is dropped silently:
+    the customer must never see a marker, and never receive a stray image.
+    """
+    by_id = {str(product.id).lower(): product for product in products}
+    wanted: list[tuple[Product, str]] = []
+    for match in PHOTO_MARKER.finditer(reply):
+        product = by_id.get(match.group(1).lower())
+        url = product_photo_url(product) if product is not None else None
+        if url and all(p.id != product.id for p, _ in wanted) \
+                and len(wanted) < MAX_PHOTOS_PER_REPLY:
+            wanted.append((product, url))
+    return PHOTO_MARKER.sub("", reply).strip(), wanted
+
+
+def product_photo_message(conversation_id, product: Product, image_url: str) -> Message:
+    """The thread record of a product photo the customer was sent."""
+    return Message(
+        conversation_id=conversation_id,
+        sender_type="assistant",
+        message_type="image",
+        # Worded as a note, not a line the shop said: it goes back to the
+        # model as history, which must know the photo was sent without being
+        # tempted to type this instead of the marker.
+        content=f"(Photo sent: {product.name})",
+        attachments=[Attachment(file_url=image_url, file_type="image",
+                                file_name="product-photo")],
+    )
 
 
 def payment_qr_message(conversation_id, image_url: str) -> Message:

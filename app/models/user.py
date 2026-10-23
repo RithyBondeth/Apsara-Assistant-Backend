@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -51,15 +51,42 @@ class User(Base):
     low_stock_telegram_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
     attention_telegram_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
     payment_telegram_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
+    # Message the customer when their order is confirmed, shipped, delivered,
+    # cancelled or paid — see app/services/customer_updates.py.
+    customer_updates_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
+    # Dynamic KHQR. The Bakong account ID is the shop's own (name@bank); the
+    # merchant ID and acquiring bank only for a bank-registered merchant. The
+    # Bakong Open API token is encrypted like every third-party credential.
+    khqr_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    bakong_account_id = Column(String(64))
+    khqr_merchant_name = Column(String(25))
+    khqr_merchant_city = Column(String(15))
+    khqr_merchant_id = Column(String(32))
+    khqr_acquiring_bank = Column(String(32))
+    bakong_api_token = Column(Text)
     # The seller's own chat with their connected bot, where every Telegram
     # alert goes. Filled in by the bot itself when the seller opens the link
     # from Settings — nobody should have to find a numeric chat id by hand.
     telegram_chat_id = Column(String(100))
     telegram_chat_name = Column(String(200))
     telegram_linked_at = Column(DateTime)
+    # Staff accounts. A staff member's `shop_id` is their owner's id; an owner
+    # has none. Requests from staff act for the owner's shop — see
+    # app/api/deps.py — so every tenant filter covers them unchanged.
+    shop_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=True, index=True)
+    role = Column(String(16), nullable=False, default="owner", server_default="owner")
+    # Set once the address is proven: the emailed link, a password reset or
+    # an OTP sign-in. Sign-in with a password waits for it, so nobody can run
+    # a shop — and spend its AI allowance — from an address they do not own.
+    email_verified_at = Column(DateTime)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+    @property
+    def bakong_token_set(self) -> bool:
+        return bool(self.bakong_api_token)
 
     customers = relationship("Customer", back_populates="user")
     products = relationship("Product", back_populates="user")

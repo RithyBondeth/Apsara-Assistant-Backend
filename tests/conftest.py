@@ -11,6 +11,7 @@ tests. Point it at a throwaway database — it is wiped repeatedly.
 
 import os
 import uuid
+from unittest import mock
 
 # Must precede any app import: app.database builds its engine from this at
 # import time, and app.core.config reads it into Settings.
@@ -23,14 +24,18 @@ os.environ.setdefault("SECRET_KEY", "test-secret-not-used-outside-tests")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 os.environ.setdefault("META_APP_SECRET", "test-app-secret")
 os.environ.setdefault("META_VERIFY_TOKEN", "test-verify-token")
+# Every test registers sellers from one address; test_signup turns it on.
+os.environ.setdefault("REGISTER_MAX_PER_IP", "0")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from passlib.context import CryptContext  # noqa: E402
 
 from app.core import security  # noqa: E402
+from app.core.config import settings  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
+from app.services import queue, realtime  # noqa: E402
 
 PASSWORD = "secret123"
 
@@ -57,9 +62,35 @@ def _clean():
         conn.exec_driver_sql(f"TRUNCATE {tables} RESTART IDENTITY CASCADE")
 
 
+@pytest.fixture(autouse=True)
+def _no_drainer_thread(monkeypatch):
+    """Keep the inline drainer thread out of tests: it would race every
+    assertion made about the queue. test_inline_drainer starts it on purpose."""
+    monkeypatch.setattr(queue, "start_drainer", lambda: None)
+    # Likewise the LISTEN thread; test_realtime starts it when it needs it.
+    monkeypatch.setattr(realtime, "start", lambda: None)
+
+
+class _DrainAfterRequest:
+    """Run queued jobs once each request has been answered.
+
+    Stands in for the inline drainer thread so a test can assert on a reply
+    straight after posting a webhook. Only here: in the app, the request never
+    waits on a job.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        await self.app(scope, receive, send)
+        if scope["type"] == "http" and settings.JOB_RUNNER == "inline":
+            queue.drain()
+
+
 @pytest.fixture
 def client():
-    with TestClient(app) as c:
+    with TestClient(_DrainAfterRequest(app)) as c:
         yield c
 
 
@@ -117,11 +148,16 @@ class Seller:
 
 
 def register(client, business_name="Sok Silk Shop", password=PASSWORD):
+    """Sign up and confirm the address through the emailed link, as a
+    seller would."""
     email = f"{uuid.uuid4().hex[:12]}@example.com"
-    r = client.post("/api/v1/auth/register",
-                    json={"email": email, "password": password,
-                          "full_name": "Sok Dara", "business_name": business_name})
+    with mock.patch("app.api.v1.endpoints.auth.send_email_verification") as mail:
+        r = client.post("/api/v1/auth/register",
+                        json={"email": email, "password": password,
+                              "full_name": "Sok Dara", "business_name": business_name})
     assert r.status_code == 201, r.text
+    verified = client.post("/api/v1/auth/verify-email", json={"token": mail.call_args.args[1]})
+    assert verified.status_code == 200, verified.text
     token = client.post("/api/v1/auth/login",
                         data={"username": email, "password": password})
     assert token.status_code == 200, token.text

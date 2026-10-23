@@ -14,6 +14,7 @@ from app.models.verification_code import VerificationCode
 
 PASSWORD_RESET = "password_reset"
 LOGIN_OTP = "login_otp"
+EMAIL_VERIFY = "email_verify"
 
 
 def hash_code(code: str) -> str:
@@ -59,7 +60,8 @@ def invalidate_outstanding(db: Session, user: User, purpose: str) -> None:
     )
 
 
-def issue(db: Session, user: User, purpose: str) -> str | None:
+def issue(db: Session, user: User, purpose: str, *,
+          lifetime_minutes: int | None = None) -> str | None:
     """Create a code for `user`, returning the plaintext to email.
 
     Returns None if one was issued too recently. Only one code of a given kind
@@ -72,10 +74,14 @@ def issue(db: Session, user: User, purpose: str) -> str | None:
     if purpose == LOGIN_OTP:
         code = f"{secrets.randbelow(1_000_000):06d}"
         lifetime = settings.OTP_EXPIRE_MINUTES
+    elif purpose == EMAIL_VERIFY:
+        code = secrets.token_urlsafe(32)
+        lifetime = settings.EMAIL_VERIFY_EXPIRE_HOURS * 60
     else:
         code = secrets.token_urlsafe(32)
         lifetime = settings.PASSWORD_RESET_EXPIRE_MINUTES
 
+    lifetime = lifetime_minutes or lifetime
     invalidate_outstanding(db, user, purpose)
     db.add(
         VerificationCode(
@@ -99,10 +105,15 @@ def _live(query):
 
 def redeem_reset_token(db: Session, token: str) -> User | None:
     """Consume a password reset token, returning its owner."""
+    return redeem_link_token(db, token, PASSWORD_RESET)
+
+
+def redeem_link_token(db: Session, token: str, purpose: str) -> User | None:
+    """Consume an emailed link's token of `purpose`, returning its owner."""
     record = _live(
         db.query(VerificationCode).filter(
             VerificationCode.code_hash == hash_code(token),
-            VerificationCode.purpose == PASSWORD_RESET,
+            VerificationCode.purpose == purpose,
         )
     ).first()
     if record is None:

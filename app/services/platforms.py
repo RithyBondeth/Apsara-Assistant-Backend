@@ -415,6 +415,19 @@ def register_telegram_webhook(encrypted_token: str, url: str, secret: str) -> Ch
         return CheckResult(False, "Registering the webhook failed unexpectedly.")
 
 
+def remove_telegram_webhook(encrypted_token: str) -> bool:
+    """Stop a bot calling us — for a shop that is being deleted. Never raises."""
+    try:
+        response = httpx.post(
+            f"https://api.telegram.org/bot{decrypt(encrypted_token)}/deleteWebhook",
+            timeout=SEND_TIMEOUT,
+        )
+        return response.status_code < 400
+    except Exception:
+        logger.warning("Could not remove a Telegram webhook", exc_info=True)
+        return False
+
+
 # ── Looking up who is writing ────────────────────────────────────────────────
 
 def fetch_messenger_profile(encrypted_token: str, psid: str) -> str | None:
@@ -449,8 +462,12 @@ def fetch_messenger_profile(encrypted_token: str, psid: str) -> str | None:
 
 # ── Sending replies ──────────────────────────────────────────────────────────
 
-def send_reply(platform: str, encrypted_token: str, recipient_id: str, text: str) -> bool:
+def send_reply(platform: str, encrypted_token: str, recipient_id: str, text: str,
+               *, tag: str | None = None) -> bool:
     """Deliver a reply. Returns whether the platform accepted it.
+
+    `tag` is a Messenger message tag, needed to write outside the 24-hour
+    window after the customer's last message; Telegram has no such window.
 
     Never raises: this runs after the webhook has already been acknowledged, so
     there is no caller left to handle an exception meaningfully.
@@ -463,7 +480,8 @@ def send_reply(platform: str, encrypted_token: str, recipient_id: str, text: str
                 url,
                 params={"access_token": token},
                 json={"recipient": {"id": recipient_id},
-                      "messaging_type": "RESPONSE",
+                      **({"messaging_type": "MESSAGE_TAG", "tag": tag} if tag
+                         else {"messaging_type": "RESPONSE"}),
                       "message": {"text": text}},
                 timeout=SEND_TIMEOUT,
             )
