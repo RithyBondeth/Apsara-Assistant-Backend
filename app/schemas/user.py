@@ -129,6 +129,7 @@ class UserOut(BaseModel):
     bakong_token_set: bool = False
     # Who is signed in: the owner, or a staff member working this shop.
     role: str = "owner"
+    email_verified_at: datetime | None = None
     member_id: UUID | None = None
     member_name: str | None = None
     member_email: str | None = None

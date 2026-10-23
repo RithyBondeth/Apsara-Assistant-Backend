@@ -71,6 +71,10 @@ class User(Base):
     shop_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
                      nullable=True, index=True)
     role = Column(String(16), nullable=False, default="owner", server_default="owner")
+    # Set once the address is proven: the emailed link, a password reset or
+    # an OTP sign-in. Sign-in with a password waits for it, so nobody can run
+    # a shop — and spend its AI allowance — from an address they do not own.
+    email_verified_at = Column(DateTime)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

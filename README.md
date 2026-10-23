@@ -38,7 +38,8 @@ This repository is the FastAPI backend. The seller dashboard lives in [Apsara-As
 - **Products, variants, images, inventory, customers, and an operations suite** (purchasing and returns).
 - **Media in Postgres or any S3-compatible bucket** (`MEDIA_STORAGE`). Files stay behind the API, deletions are tracked by a database trigger, and `python -m app.scripts.move_media` moves existing files.
 - **Durable job queue** on PostgreSQL (`SKIP LOCKED`), run inline or as a separate worker.
-- **Security:** encrypted third-party credentials at rest, HttpOnly cookie sessions, OTP and password reset, sign-in throttling, and signed webhooks.
+- **Privacy.** A shop owner can delete the account and everything in it (`POST /auth/delete-account`, password required). Meta's data-deletion callback is at `POST /api/v1/privacy/meta-data-deletion`: it erases the person's chats and personal details from every shop while keeping the shops' sales records, and answers with a confirmation code the person can look up.
+- **Security:** encrypted third-party credentials at rest, HttpOnly cookie sessions, email confirmation before password sign-in, a per-address cap on sign-ups, OTP and password reset, sign-in throttling, and signed webhooks.
 - **Cost controls:** per-seller daily ceilings for AI replies, drafts, and receipt scans.
 - **Observability:** structured logs, request IDs, optional Sentry, and liveness and readiness probes.
 
