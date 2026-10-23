@@ -29,8 +29,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 from passlib.context import CryptContext  # noqa: E402
 
 from app.core import security  # noqa: E402
+from app.core.config import settings  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
+from app.services import queue  # noqa: E402
 
 PASSWORD = "secret123"
 
@@ -57,9 +59,33 @@ def _clean():
         conn.exec_driver_sql(f"TRUNCATE {tables} RESTART IDENTITY CASCADE")
 
 
+@pytest.fixture(autouse=True)
+def _no_drainer_thread(monkeypatch):
+    """Keep the inline drainer thread out of tests: it would race every
+    assertion made about the queue. test_inline_drainer starts it on purpose."""
+    monkeypatch.setattr(queue, "start_drainer", lambda: None)
+
+
+class _DrainAfterRequest:
+    """Run queued jobs once each request has been answered.
+
+    Stands in for the inline drainer thread so a test can assert on a reply
+    straight after posting a webhook. Only here: in the app, the request never
+    waits on a job.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        await self.app(scope, receive, send)
+        if scope["type"] == "http" and settings.JOB_RUNNER == "inline":
+            queue.drain()
+
+
 @pytest.fixture
 def client():
-    with TestClient(app) as c:
+    with TestClient(_DrainAfterRequest(app)) as c:
         yield c
 
 

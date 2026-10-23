@@ -2,9 +2,9 @@
 #
 # The worker is a separate process on purpose. Queued work — the OpenAI call
 # behind every inbound customer message — no longer runs inside the request that
-# received it, so something has to run it. With JOB_RUNNER=inline the API does
-# it itself and this service can be dropped; at that point a busy webhook and a
-# slow model compete for the same workers.
+# received it, so something has to run it. With JOB_RUNNER=inline the API runs
+# it on a thread of its own and this service can be dropped; requests are still
+# answered straight away, but jobs are then worked one at a time per API process.
 
 services:
   db:

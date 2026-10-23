@@ -58,9 +58,10 @@ class Settings(BaseSettings):
     META_VERIFY_TOKEN: str = ""
     GRAPH_API_VERSION: str = "v21.0"
 
-    # "inline" processes queued work in the web process, so a single-process
-    # deployment needs no separate worker. "worker" leaves it entirely to
-    # `python -m app.worker`. Either way the job is persisted first.
+    # "inline" processes queued work on a thread of the web process — never in
+    # the request — so a single-process deployment needs no separate worker.
+    # "worker" leaves it entirely to `python -m app.worker`. Either way the job
+    # is persisted first.
     JOB_RUNNER: str = "inline"
     # How long a claimed job may be held before it is assumed orphaned.
     JOB_LEASE_SECONDS: int = 300
