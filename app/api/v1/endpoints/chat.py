@@ -3,20 +3,18 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.clock import utcnow
 from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.message import Message
-from app.models.product import Product
 from app.models.user import User
 from app.schemas.chat import ChatRequest, ChatResponse, OrderDraftItemOut, OrderDraftOut
 from app.schemas.message import MessageOut
 from app.services.quota import spend_draft, spend_reply
 from app.services.ai_service import (
-    CATALOGUE_LIMIT,
     HISTORY_LIMIT,
     AIError,
     build_openai_messages,
@@ -28,6 +26,7 @@ from app.services.ai_service import (
     split_needs_seller,
     split_payment_qr,
 )
+from app.services import catalogue
 from app.services.payment_qrs import default_payment_qr_url
 
 router = APIRouter()
@@ -58,13 +57,7 @@ def draft_order(
     if not any(message.content for message in history):
         raise HTTPException(status_code=400, detail="The conversation has no text to draft from")
 
-    products = (
-        db.query(Product).options(selectinload(Product.variants))
-        .filter(Product.user_id == current_user.id, Product.is_active == True)
-        .order_by(Product.created_at.desc())
-        .limit(CATALOGUE_LIMIT)
-        .all()
-    )
+    products = catalogue.select_products(db, current_user.id, history).products
     if not products:
         raise HTTPException(status_code=400, detail="Add an active product before drafting an order")
     if not spend_draft(db, current_user.id):
@@ -186,18 +179,7 @@ def chat(
     db.commit()
     db.refresh(customer_msg)
 
-    # ── 3. Load the seller's active catalogue ────────────────────────────────
-    # Bounded in the query, not just when the prompt is built — a seller with a
-    # large catalogue should not pull all of it into memory on every message.
-    products = (
-        db.query(Product).options(selectinload(Product.variants))
-        .filter(Product.user_id == current_user.id, Product.is_active == True)
-        .order_by(Product.created_at.desc())
-        .limit(CATALOGUE_LIMIT)
-        .all()
-    )
-
-    # ── 4. Load recent history, newest-last ──────────────────────────────────
+    # ── 3. Load recent history, newest-last ──────────────────────────────────
     # Trimmed in SQL rather than loading every message in the conversation and
     # slicing in Python, which grows without bound as a thread gets longer.
     recent = (
@@ -209,6 +191,11 @@ def chat(
     )
     history = list(reversed(recent))
 
+    # ── 4. Pick the catalogue for this conversation ──────────────────────────
+    # Bounded in the query — a large catalogue is not pulled into memory on
+    # every message — and chosen by what the thread is about.
+    selection = catalogue.select_products(db, current_user.id, history)
+
     # ── 5. Generate the reply ────────────────────────────────────────────────
     # Same ceiling the webhooks are held to, so a seller cannot sidestep it by
     # driving the assistant from the dashboard instead.
@@ -219,7 +206,10 @@ def chat(
                    "Your message was saved.",
         )
 
-    system_prompt = build_system_prompt(current_user, products)
+    system_prompt = build_system_prompt(
+        current_user, selection.products,
+        catalogue_note=catalogue.name_index_section(selection),
+    )
     try:
         raw_reply = generate_ai_reply(build_openai_messages(system_prompt, history))
     except AIError as exc:
