@@ -7,7 +7,8 @@ from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.api.deps import get_current_user
+from app.api.deps import get_actor, get_current_user
+from app.services import team
 from app.core.clock import utcnow
 from app.database import get_db
 from app.models.conversation import Conversation, ConversationNote, ConversationTag
@@ -78,10 +79,11 @@ def list_conversations(
     search: str | None = Query(default=None, max_length=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     query = (
         db.query(Conversation)
-        .options(selectinload(Conversation.tags))
+        .options(selectinload(Conversation.tags), selectinload(Conversation.assigned_user))
         .filter(Conversation.user_id == current_user.id)
     )
     if status:
@@ -99,7 +101,7 @@ def list_conversations(
             raise HTTPException(status_code=422, detail="handling_mode must be auto or manual")
         query = query.filter(Conversation.handling_mode == handling_mode)
     if assignment == "me":
-        query = query.filter(Conversation.assigned_user_id == current_user.id)
+        query = query.filter(Conversation.assigned_user_id == actor.id)
     elif assignment == "unassigned":
         query = query.filter(Conversation.assigned_user_id.is_(None))
     elif assignment:
@@ -239,6 +241,7 @@ def update_conversation(
     payload: ConversationUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id, Conversation.user_id == current_user.id
@@ -248,14 +251,13 @@ def update_conversation(
 
     changes = payload.model_dump(exclude_unset=True)
     assignee = changes.get("assigned_user_id")
-    if assignee is not None and assignee != current_user.id:
-        # The current account is the only staff identity today. Keeping this a
-        # foreign key makes team members additive later without unsafe IDs now.
+    if assignee is not None and not team.is_member(db, current_user.id, assignee):
+        # Only someone working this shop can own one of its threads.
         raise HTTPException(status_code=404, detail="Team member not found")
     for field, value in changes.items():
         setattr(conversation, field, value)
     if changes.get("handling_mode") == "manual" and "assigned_user_id" not in changes:
-        conversation.assigned_user_id = current_user.id
+        conversation.assigned_user_id = actor.id
     elif changes.get("handling_mode") == "auto" and "assigned_user_id" not in changes:
         conversation.assigned_user_id = None
     if changes.get("status") == "closed":
@@ -291,6 +293,7 @@ def add_conversation_note(
     payload: ConversationNoteCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id, Conversation.user_id == current_user.id
@@ -299,7 +302,7 @@ def add_conversation_note(
         raise HTTPException(status_code=404, detail="Conversation not found")
     note = ConversationNote(
         conversation_id=conversation.id,
-        author_user_id=current_user.id,
+        author_user_id=actor.id,
         content=payload.content.strip(),
     )
     db.add(note)
@@ -427,6 +430,7 @@ def send_message(
     payload: MessageCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id, Conversation.user_id == current_user.id
@@ -498,7 +502,7 @@ def send_message(
     if conversation.first_response_at is None and conversation.first_customer_message_at:
         conversation.first_response_at = now
     conversation.handling_mode = "manual"
-    conversation.assigned_user_id = current_user.id
+    conversation.assigned_user_id = actor.id
     # The seller has answered; the next time the customer needs them is a new
     # episode, and alerts again.
     clear_attention(conversation)

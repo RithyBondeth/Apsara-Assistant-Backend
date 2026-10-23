@@ -7,7 +7,7 @@ import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.deps import get_current_user
+from app.api.deps import get_actor, get_current_user
 from app.core.clock import utcnow
 from app.core.config import settings
 from app.database import get_db
@@ -302,6 +302,7 @@ def update_order(
     payload: OrderUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     order = _owned_order(db, order_id, current_user.id, lock=True)
 
@@ -319,24 +320,24 @@ def update_order(
     if new_status is not None and new_status != order.status:
         if new_status == "cancelled":
             release_order_stock(
-                db, order, kind="order_cancelled", actor_user_id=current_user.id
+                db, order, kind="order_cancelled", actor_user_id=actor.id
             )
         elif order.status == "cancelled":
             _deduct_order(
                 db,
                 order,
                 reserve=new_status in RESERVING_STATUSES,
-                actor_user_id=current_user.id,
+                actor_user_id=actor.id,
             )
         elif order.status in RESERVING_STATUSES and new_status in FULFILLED_STATUSES:
             _change_reserved_stock(
                 db, order, delta_sign=-1, kind="reservation_fulfilled",
-                actor_user_id=current_user.id,
+                actor_user_id=actor.id,
             )
         elif order.status in FULFILLED_STATUSES and new_status in RESERVING_STATUSES:
             _change_reserved_stock(
                 db, order, delta_sign=1, kind="reservation_restored",
-                actor_user_id=current_user.id,
+                actor_user_id=actor.id,
             )
 
         if new_status == "pending":
@@ -531,6 +532,7 @@ def confirm_order_receipt(
     attachment_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     order = _owned_order(db, order_id, current_user.id, lock=True)
     if order.status == "cancelled":
@@ -554,11 +556,11 @@ def confirm_order_receipt(
     now = utcnow()
     receipt.review_status = "accepted"
     receipt.reviewed_at = now
-    receipt.reviewed_by_user_id = current_user.id
+    receipt.reviewed_by_user_id = actor.id
     order.payment_status = PAID
     order.payment_method = "qr"
     order.payment_receipt_attachment_id = receipt.id
-    order.payment_confirmed_by_user_id = current_user.id
+    order.payment_confirmed_by_user_id = actor.id
     order.paid_at = now
     # What the receipt said was paid, if it was read; the seller confirming
     # is what makes it true, the reading is what makes it a number.
@@ -580,6 +582,7 @@ def reject_order_receipt(
     attachment_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     order = _owned_order(db, order_id, current_user.id, lock=True)
     receipt = _receipt_for_order(db, order, attachment_id, lock=True)
@@ -588,7 +591,7 @@ def reject_order_receipt(
                             detail="A confirmed payment receipt cannot be rejected")
     receipt.review_status = "rejected"
     receipt.reviewed_at = utcnow()
-    receipt.reviewed_by_user_id = current_user.id
+    receipt.reviewed_by_user_id = actor.id
     db.commit()
     db.refresh(receipt)
     return receipt
@@ -599,13 +602,14 @@ def delete_order(
     order_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     order = _owned_order(db, order_id, current_user.id, lock=True)
 
     # A cancelled order has already had its stock returned; don't restock twice.
     if order.status != "cancelled":
         release_order_stock(
-            db, order, kind="order_deleted", actor_user_id=current_user.id
+            db, order, kind="order_deleted", actor_user_id=actor.id
         )
 
     db.delete(order)
