@@ -127,6 +127,11 @@ class UserOut(BaseModel):
     khqr_merchant_id: str | None = None
     khqr_acquiring_bank: str | None = None
     bakong_token_set: bool = False
+    # Who is signed in: the owner, or a staff member working this shop.
+    role: str = "owner"
+    member_id: UUID | None = None
+    member_name: str | None = None
+    member_email: str | None = None
     telegram_chat_id: str | None
     telegram_chat_name: str | None
     telegram_linked_at: datetime | None

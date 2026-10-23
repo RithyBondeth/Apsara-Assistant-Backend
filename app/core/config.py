@@ -122,6 +122,9 @@ class Settings(BaseSettings):
 
     # Lifetimes for emailed codes.
     PASSWORD_RESET_EXPIRE_MINUTES: int = 30
+    # An invite is opened when the new staff member next checks their mail,
+    # which is rarely within half an hour.
+    STAFF_INVITE_EXPIRE_HOURS: int = 72
     OTP_EXPIRE_MINUTES: int = 10
     OTP_MAX_ATTEMPTS: int = 5
     # Minimum gap between code requests for the same account, in seconds.

@@ -69,6 +69,24 @@ password will not change.
     )
 
 
+def send_staff_invite(to: str, token: str, shop: str, inviter: str, hours: int) -> None:
+    link = f"{settings.APP_BASE_URL.rstrip('/')}/reset-password?token={token}"
+    send_email(
+        to,
+        f"You've been added to {shop} on Apsara Assistant",
+        f"""{inviter} has added you to {shop}'s team on Apsara Assistant, where the
+shop answers its customers on Messenger and Telegram.
+
+Open this link to choose your password and sign in:
+
+{link}
+
+The link expires in {hours} hours and can be used once. If you were not
+expecting this, you can ignore this email.
+""",
+    )
+
+
 def send_login_otp(to: str, code: str) -> None:
     send_email(
         to,

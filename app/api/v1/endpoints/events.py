@@ -28,7 +28,8 @@ def _shop_for(token: str | None) -> str:
         user = db.query(User).filter(User.id == user_id, User.is_active == True).first()  # noqa: E712
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-        return str(user.id)
+        # Staff receive their shop's events.
+        return str(user.shop_id or user.id)
     finally:
         db.close()
 

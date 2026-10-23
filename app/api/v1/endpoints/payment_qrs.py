@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_owner
 from app.core.currency import CURRENCIES
 from app.database import get_db
 from app.models.payment_qr import PaymentQr
@@ -46,6 +46,7 @@ def create_payment_qr(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _owner: User = Depends(require_owner),
 ):
     _lock_user(db, current_user.id)
     existing = db.query(PaymentQr).filter(PaymentQr.user_id == current_user.id).all()
@@ -92,6 +93,7 @@ def update_payment_qr(
     payload: PaymentQrUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _owner: User = Depends(require_owner),
 ):
     _lock_user(db, current_user.id)
     qrs = (
@@ -133,6 +135,7 @@ def delete_payment_qr(
     qr_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _owner: User = Depends(require_owner),
 ):
     _lock_user(db, current_user.id)
     qrs = (

@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_actor, get_current_user
 from app.database import get_db
 from app.models.inventory_movement import InventoryMovement
 from app.models.product import Product
@@ -43,6 +43,7 @@ def adjust_product_stock(
     payload: InventoryAdjustmentCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     product = (
         db.query(Product)
@@ -79,7 +80,7 @@ def adjust_product_stock(
         available_delta=payload.quantity_delta,
         kind="manual_adjustment",
         reason=payload.reason,
-        actor_user_id=current_user.id,
+        actor_user_id=actor.id,
     )
     db.commit()
     db.refresh(product)

@@ -59,7 +59,8 @@ def invalidate_outstanding(db: Session, user: User, purpose: str) -> None:
     )
 
 
-def issue(db: Session, user: User, purpose: str) -> str | None:
+def issue(db: Session, user: User, purpose: str, *,
+          lifetime_minutes: int | None = None) -> str | None:
     """Create a code for `user`, returning the plaintext to email.
 
     Returns None if one was issued too recently. Only one code of a given kind
@@ -76,6 +77,7 @@ def issue(db: Session, user: User, purpose: str) -> str | None:
         code = secrets.token_urlsafe(32)
         lifetime = settings.PASSWORD_RESET_EXPIRE_MINUTES
 
+    lifetime = lifetime_minutes or lifetime
     invalidate_outstanding(db, user, purpose)
     db.add(
         VerificationCode(

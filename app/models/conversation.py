@@ -54,6 +54,10 @@ class Conversation(Base):
     customer = relationship("Customer", back_populates="conversations")
     platform_connection = relationship("PlatformConnection")
     assigned_user = relationship("User", foreign_keys=[assigned_user_id])
+
+    @property
+    def assigned_user_name(self) -> str | None:
+        return self.assigned_user.full_name if self.assigned_user else None
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="conversation")
     notes = relationship(

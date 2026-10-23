@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, Numeric, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -65,6 +65,12 @@ class User(Base):
     telegram_chat_id = Column(String(100))
     telegram_chat_name = Column(String(200))
     telegram_linked_at = Column(DateTime)
+    # Staff accounts. A staff member's `shop_id` is their owner's id; an owner
+    # has none. Requests from staff act for the owner's shop — see
+    # app/api/deps.py — so every tenant filter covers them unchanged.
+    shop_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=True, index=True)
+    role = Column(String(16), nullable=False, default="owner", server_default="owner")
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

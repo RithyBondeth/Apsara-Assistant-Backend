@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import get_current_user
+from app.api.deps import get_actor, get_current_user
 from app.database import get_db
 from app.models.product import Product
 from app.models.product_image import ProductImage
@@ -52,6 +52,7 @@ def create_product(
     payload: ProductCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     data = payload.model_dump(exclude={"variants"})
     opening_stock = data.pop("stock")
@@ -90,7 +91,7 @@ def create_product(
                     available_delta=stock,
                     kind="opening_balance",
                     reason="Opening balance",
-                    actor_user_id=current_user.id,
+                    actor_user_id=actor.id,
                 )
             else:
                 evaluate_low_stock(db, product, variant)
@@ -159,6 +160,7 @@ def create_product_variant(
     payload: ProductVariantCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     product = _owned_product_for_media(db, product_id, current_user.id)
     count = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).count()
@@ -190,7 +192,7 @@ def create_product_variant(
                 available_delta=payload.stock,
                 kind="opening_balance",
                 reason="Variant opening balance",
-                actor_user_id=current_user.id,
+                actor_user_id=actor.id,
             )
         else:
             evaluate_low_stock(db, product, variant)
@@ -418,6 +420,7 @@ def update_product(
     payload: ProductUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     product = db.query(Product).filter(
         Product.id == product_id, Product.user_id == current_user.id
@@ -443,7 +446,7 @@ def update_product(
             available_delta=requested_stock - variants[0].stock,
             kind="manual_adjustment",
             reason="Stock balance changed from product editor",
-            actor_user_id=current_user.id,
+            actor_user_id=actor.id,
         )
     if "price" in data and len(variants) == 1:
         variants[0].price = data["price"]
