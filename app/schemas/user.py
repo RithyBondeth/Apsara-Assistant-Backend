@@ -42,6 +42,7 @@ class UserUpdate(BaseModel):
     low_stock_telegram_enabled: bool | None = None
     attention_telegram_enabled: bool | None = None
     payment_telegram_enabled: bool | None = None
+    customer_updates_enabled: bool | None = None
 
     @field_validator("payment_qr_url")
     @classmethod
@@ -90,6 +91,7 @@ class UserOut(BaseModel):
     low_stock_telegram_enabled: bool
     attention_telegram_enabled: bool
     payment_telegram_enabled: bool
+    customer_updates_enabled: bool = True
     telegram_chat_id: str | None
     telegram_chat_name: str | None
     telegram_linked_at: datetime | None

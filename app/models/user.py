@@ -46,6 +46,9 @@ class User(Base):
     low_stock_telegram_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
     attention_telegram_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
     payment_telegram_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
+    # Message the customer when their order is confirmed, shipped, delivered,
+    # cancelled or paid — see app/services/customer_updates.py.
+    customer_updates_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
     # The seller's own chat with their connected bot, where every Telegram
     # alert goes. Filled in by the bot itself when the seller opens the link
     # from Settings — nobody should have to find a numeric chat id by hand.
