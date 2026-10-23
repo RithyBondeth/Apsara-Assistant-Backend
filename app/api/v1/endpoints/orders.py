@@ -24,7 +24,7 @@ from app.models.user import User
 from app.schemas.message import AttachmentOut, ReceiptOut
 from app.schemas.order import CheckoutOut, OrderCreate, OrderOut, OrderUpdate
 from app.services import stripe_gateway
-from app.services import receipts
+from app.services import customer_updates, receipts
 from app.services import storage
 from app.services.inventory import (
     FULFILLED_STATUSES,
@@ -306,6 +306,7 @@ def update_order(
     order = _owned_order(db, order_id, current_user.id, lock=True)
 
     data = payload.model_dump(exclude_unset=True)
+    notify_customer = data.pop("notify_customer", True)
     new_status = data.get("status")
     if new_status is not None and new_status not in VALID_STATUSES:
         raise HTTPException(
@@ -343,8 +344,11 @@ def update_order(
         elif new_status != "cancelled":
             order.reservation_expires_at = None
 
+    changed_status = new_status is not None and new_status != order.status
     for field, value in data.items():
         setattr(order, field, value)
+    if changed_status and notify_customer:
+        customer_updates.notify(db, order, new_status)
     db.commit()
     db.refresh(order)
     return order
@@ -526,6 +530,7 @@ def confirm_order_receipt(
     else:
         order.paid_amount = order.total_amount
         order.paid_currency = order.currency
+    customer_updates.notify(db, order, customer_updates.PAID)
     db.commit()
     db.refresh(order)
     return order

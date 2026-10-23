@@ -41,6 +41,9 @@ class OrderUpdate(BaseModel):
     status: str | None = None
     delivery_address: str | None = None
     notes: str | None = None
+    # False to change the status without messaging the customer, for a
+    # correction they should not hear about.
+    notify_customer: bool = True
 
 
 class OrderOut(BaseModel):
@@ -61,6 +64,7 @@ class OrderOut(BaseModel):
     paid_at: datetime | None
     paid_amount: Decimal | None = None
     paid_currency: str | None = None
+    customer_notified_events: list[str] = []
     created_at: datetime
     updated_at: datetime
     items: list[OrderItemOut] = []

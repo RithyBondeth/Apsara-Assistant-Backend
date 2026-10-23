@@ -1,7 +1,7 @@
 import uuid
 
 from sqlalchemy import Column, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.core.clock import utcnow
@@ -57,6 +57,9 @@ class Order(Base):
     # a riel payment on a dollar order is a fact the books need.
     paid_amount = Column(Numeric(12, 2))
     paid_currency = Column(String(3))
+    # Order events the customer has been told about, so a redelivered job or
+    # a status set twice never sends the same message again.
+    customer_notified_events = Column(JSONB, nullable=False, default=list, server_default="[]")
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 

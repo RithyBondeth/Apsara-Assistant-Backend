@@ -28,6 +28,7 @@ This repository is the FastAPI backend. The seller dashboard lives in [Apsara-As
 - **Product photos in chat.** The assistant can send a product's primary photo when a customer asks to see it, using an id-checked marker in a single model round trip.
 - **Unified inbox** for Facebook Messenger and Telegram, with idempotent message handling and a manual-mode takeover.
 - **Orders and payments.** AI order drafts, Stripe Checkout with each seller's own account, and payment-QR support for sellers who cannot use Stripe.
+- **Order updates to the customer.** Confirmed, shipped, delivered, cancelled and paid each send the customer one message in their thread, in Khmer or English. Each is sent once, can be skipped per change (`notify_customer: false`), and can be turned off per shop (`customer_updates_enabled`).
 - **Receipt verification.** A vision model reads customer receipt photos and returns a verdict against the order: `match`, `amount_mismatch`, `duplicate`, and others.
 - **Dual currency (USD/KHR)** at each shop's own exchange rate.
 - **Seller alerts** sent to the seller's phone through Telegram, once per episode, in the seller's language.
