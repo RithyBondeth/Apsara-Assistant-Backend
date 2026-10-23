@@ -44,6 +44,7 @@ from app.services.platforms import (
     send_reply,
 )
 from app.services.queue import register
+from app.services import storage
 from app.services.quota import spend_reply
 from app.services.payment_qrs import default_payment_qr_url
 from app.services.receipts import queue_scan
@@ -201,13 +202,15 @@ def handle_inbound(connection_id, message: InboundMessage) -> None:
                 )
                 if stored_bytes + len(downloaded.content) > settings.MAX_ATTACHMENT_BYTES:
                     raise ValueError("Attachments exceed the per-message size limit")
-                stored_attachments.append(Attachment(
-                    blob=downloaded.content,
+                attachment = Attachment(
                     file_type=downloaded.content_type,
                     file_name=downloaded.file_name,
                     file_size=len(downloaded.content),
                     review_status="pending",
-                ))
+                )
+                storage.store(attachment, "attachments", downloaded.content,
+                              downloaded.content_type)
+                stored_attachments.append(attachment)
                 stored_bytes += len(downloaded.content)
             except Exception as exc:
                 logger.warning("Could not retain attachment from %s message %s: %s",

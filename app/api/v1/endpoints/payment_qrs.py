@@ -9,7 +9,7 @@ from app.database import get_db
 from app.models.payment_qr import PaymentQr
 from app.models.user import User
 from app.schemas.payment_qr import PaymentQrOut, PaymentQrUpdate
-from app.services.media import MAX_PAYMENT_QRS, read_image_upload
+from app.services.media import MAX_PAYMENT_QRS, read_image_upload, store_or_503
 
 router = APIRouter()
 
@@ -73,13 +73,13 @@ def create_payment_qr(
         bank_name=_clean_optional(bank_name),
         account_name=_clean_optional(account_name),
         currency=currency,
-        blob=blob,
         content_type=content_type,
         file_name=file_name,
         file_size=len(blob),
         is_active=True,
         is_default=make_default,
     )
+    store_or_503(qr, "payment-qrs", blob, content_type)
     db.add(qr)
     db.commit()
     db.refresh(qr)

@@ -6,6 +6,7 @@ from sqlalchemy.orm import relationship
 
 from app.core.clock import utcnow
 from app.database import Base
+from app.models.storage_tombstone import track_deletions
 
 
 class Attachment(Base):
@@ -18,6 +19,8 @@ class Attachment(Base):
     # Telegram's download URL contains the bot token.
     file_url = Column(String)
     blob = Column(LargeBinary)
+    # Set instead of `blob` when MEDIA_STORAGE=s3 — see app/services/storage.py.
+    storage_key = Column(String(512))
     file_type = Column(String)
     file_name = Column(String)
     file_size = Column(Integer)
@@ -38,3 +41,6 @@ class Attachment(Base):
     created_at = Column(DateTime, default=utcnow)
 
     message = relationship("Message", back_populates="attachments")
+
+
+track_deletions(Attachment.__table__)

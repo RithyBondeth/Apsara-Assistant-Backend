@@ -25,6 +25,7 @@ from app.schemas.message import AttachmentOut, ReceiptOut
 from app.schemas.order import CheckoutOut, OrderCreate, OrderOut, OrderUpdate
 from app.services import stripe_gateway
 from app.services import receipts
+from app.services import storage
 from app.services.inventory import (
     FULFILLED_STATUSES,
     RESERVING_STATUSES,
@@ -63,7 +64,7 @@ def _receipt_for_order(db: Session, order: Order, attachment_id: UUID,
             Attachment.id == attachment_id,
             Message.conversation_id == order.conversation_id,
             Message.sender_type == "customer",
-            Attachment.blob.isnot(None),
+            storage.has_content(Attachment),
         )
     )
     receipt = query.with_for_update().first() if lock else query.first()
@@ -452,7 +453,7 @@ def list_order_receipts(
         .filter(
             Message.conversation_id == order.conversation_id,
             Message.sender_type == "customer",
-            Attachment.blob.isnot(None),
+            storage.has_content(Attachment),
         )
         .order_by(Attachment.created_at.desc())
         .all()

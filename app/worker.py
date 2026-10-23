@@ -38,6 +38,7 @@ def _on_signal(signum, _frame):
 
 
 def main() -> None:
+    settings.check_media_storage()
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
