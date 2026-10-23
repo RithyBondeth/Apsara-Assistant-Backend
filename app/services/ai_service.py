@@ -23,9 +23,9 @@ logger = logging.getLogger(__name__)
 # lean on earlier turns ("how much for two?") still resolve.
 HISTORY_LIMIT = 20
 
-# Catalogue rows in the prompt. A seller past this many products needs retrieval
-# rather than a full dump; until then the whole catalogue fits comfortably.
-CATALOGUE_LIMIT = 100
+# Products rendered in full. Past this many, app/services/catalogue.py picks
+# the ones the conversation is about and lists the rest by name.
+from app.services.catalogue import CATALOGUE_LIMIT  # noqa: E402
 CATALOGUE_VARIANT_LIMIT = 300
 
 # A message the seller typed by hand is, to the customer, the same voice as the
@@ -80,7 +80,10 @@ def _client() -> OpenAI:
 
 # ── System prompt builder ─────────────────────────────────────────────────────
 
-def build_system_prompt(user: User, products: list[Product]) -> str:
+def build_system_prompt(user: User, products: list[Product], *,
+                        catalogue_note: str = "") -> str:
+    """The system prompt. `catalogue_note` is what to say about products not
+    rendered in full — see catalogue.name_index_section."""
     business = user.business_name or user.full_name
     currency = user.currency or DEFAULT_CURRENCY
     payment_qr = default_payment_qr_url(user)
@@ -176,7 +179,7 @@ Your role:
 PRODUCT CATALOG
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {product_catalog}
-{shop_section}
+{catalogue_note}{shop_section}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 LANGUAGE RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━

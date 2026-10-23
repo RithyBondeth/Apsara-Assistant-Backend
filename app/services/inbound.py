@@ -7,7 +7,7 @@ session and swallows its own failures — there is no request left to fail.
 import logging
 
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.core.clock import utcnow
 from app.core.config import settings
@@ -18,10 +18,8 @@ from app.models.attachment import Attachment
 from app.models.message import Message
 from app.models.platform_connection import PlatformConnection
 from app.models.order import PAID, Order
-from app.models.product import Product
 from app.models.user import User
 from app.services.ai_service import (
-    CATALOGUE_LIMIT,
     HISTORY_LIMIT,
     AIError,
     build_openai_messages,
@@ -44,7 +42,7 @@ from app.services.platforms import (
     send_reply,
 )
 from app.services.queue import register
-from app.services import storage
+from app.services import catalogue, storage
 from app.services.quota import spend_reply
 from app.services.payment_qrs import default_payment_qr_url
 from app.services.receipts import queue_scan
@@ -381,13 +379,6 @@ def _generate(db: Session, connection: PlatformConnection,
     if not seller:
         return None
 
-    products = (
-        db.query(Product).options(selectinload(Product.variants))
-        .filter(Product.user_id == seller.id, Product.is_active == True)
-        .order_by(Product.created_at.desc())
-        .limit(CATALOGUE_LIMIT)
-        .all()
-    )
     recent = (
         db.query(Message)
         .filter(Message.conversation_id == conversation.id)
@@ -395,11 +386,16 @@ def _generate(db: Session, connection: PlatformConnection,
         .limit(HISTORY_LIMIT)
         .all()
     )
+    history = list(reversed(recent))
+    selection = catalogue.select_products(db, seller.id, history)
 
     try:
         raw = generate_ai_reply(
-            build_openai_messages(build_system_prompt(seller, products),
-                                  list(reversed(recent)))
+            build_openai_messages(
+                build_system_prompt(seller, selection.products,
+                                    catalogue_note=catalogue.name_index_section(selection)),
+                history,
+            )
         )
     except AIError:
         # Already logged with its cause. The customer's message is stored, so
