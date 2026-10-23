@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.core.logging import configure as configure_logging
 from app.core.observability import configure as configure_error_tracking
 from app.database import SessionLocal
-from app.services import queue
+from app.services import queue, realtime
 
 configure_logging(settings.LOG_LEVEL, settings.LOG_FORMAT)
 configure_error_tracking()
@@ -28,9 +28,11 @@ async def lifespan(_app: FastAPI):
     # deployments use JOB_RUNNER=worker and start nothing here.
     if settings.JOB_RUNNER == "inline":
         queue.start_drainer()
+    realtime.start()
     try:
         yield
     finally:
+        realtime.stop()
         queue.stop_drainer()
 
 

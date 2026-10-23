@@ -6,6 +6,7 @@ from sqlalchemy.orm import relationship
 
 from app.core.clock import utcnow
 from app.database import Base
+from app.services.realtime import notify_on_change
 
 # status: pending, confirmed, processing, shipped, delivered, cancelled
 # payment_status: unpaid, pending, paid
@@ -84,3 +85,6 @@ class Order(Base):
     conversation = relationship("Conversation", back_populates="orders")
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     inventory_movements = relationship("InventoryMovement", back_populates="order")
+
+
+notify_on_change(Order.__table__)

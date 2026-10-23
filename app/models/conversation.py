@@ -6,6 +6,7 @@ from sqlalchemy.orm import relationship
 
 from app.core.clock import utcnow
 from app.database import Base
+from app.services.realtime import notify_on_change
 
 # status: open, closed, pending
 # platform: messenger, telegram, tiktok, website
@@ -98,3 +99,6 @@ class ConversationTag(Base):
     created_at = Column(DateTime, nullable=False, default=utcnow)
 
     conversation = relationship("Conversation", back_populates="tags")
+
+
+notify_on_change(Conversation.__table__)

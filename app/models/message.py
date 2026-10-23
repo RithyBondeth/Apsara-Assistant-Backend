@@ -6,6 +6,7 @@ from sqlalchemy.orm import relationship
 
 from app.core.clock import utcnow
 from app.database import Base
+from app.services.realtime import notify_on_change
 
 # sender_type: customer, assistant, seller
 # message_type: text, image, voice, file
@@ -45,3 +46,6 @@ class Message(Base):
 
     conversation = relationship("Conversation", back_populates="messages")
     attachments = relationship("Attachment", back_populates="message", cascade="all, delete-orphan")
+
+
+notify_on_change(Message.__table__)
