@@ -20,6 +20,9 @@ class ChatResponse(BaseModel):
     # which is a separate message on Messenger and Telegram and so is one here
     # too rather than being folded into the reply.
     qr_message: MessageOut | None = None
+    # Product photos the assistant chose to send, each its own message for
+    # the same reason, in the order they would arrive.
+    photo_messages: list[MessageOut] = []
 
 
 class OrderDraftItemOut(BaseModel):

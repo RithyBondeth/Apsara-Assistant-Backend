@@ -24,12 +24,19 @@ This repository is the FastAPI backend. The seller dashboard lives in [Apsara-As
 ## Features
 
 - **AI replies grounded in the shop.** The catalogue, prices, address, hours, delivery and policies are rendered into the prompt. When the model is unsure, it escalates to the seller instead of guessing.
+- **Large catalogues.** Up to 100 products are shown to the assistant in full. Beyond that, it sees the products the conversation is about (matched by name, including Khmer written without spaces, by description words, or by SKU) and then best sellers, with the rest listed by name only.
+- **Product photos in chat.** The assistant can send a product's primary photo when a customer asks to see it, using an id-checked marker in a single model round trip.
+- **Real-time inbox.** Postgres triggers `NOTIFY` on new messages and on conversation and order changes, delivered only on commit and across processes. Each API process holds one `LISTEN` connection and streams events to the browser over Server-Sent Events (`GET /api/v1/events`).
+- **Staff accounts.** The owner invites staff by email (a single-use, 72-hour password link). Staff work the same shop — inbox, orders, catalogue, inventory — under their own names, so assignments, notes, stock movements and payment confirmations record who acted. Channels, payment details, shop settings and the team stay owner-only.
 - **Unified inbox** for Facebook Messenger and Telegram, with idempotent message handling and a manual-mode takeover.
 - **Orders and payments.** AI order drafts, Stripe Checkout with each seller's own account, and payment-QR support for sellers who cannot use Stripe.
+- **Order updates to the customer.** Confirmed, shipped, delivered, cancelled and paid each send the customer one message in their thread, in Khmer or English. Each is sent once, can be skipped per change (`notify_customer: false`), and can be turned off per shop (`customer_updates_enabled`).
+- **Dynamic KHQR with Bakong confirmation.** Each order can get a KHQR for its exact amount and currency. The assistant sends it in place of the static QR when an order is awaiting payment, and the order is marked paid as soon as Bakong reports the transaction (checked by the MD5 of the code).
 - **Receipt verification.** A vision model reads customer receipt photos and returns a verdict against the order: `match`, `amount_mismatch`, `duplicate`, and others.
 - **Dual currency (USD/KHR)** at each shop's own exchange rate.
 - **Seller alerts** sent to the seller's phone through Telegram, once per episode, in the seller's language.
 - **Products, variants, images, inventory, customers, and an operations suite** (purchasing and returns).
+- **Media in Postgres or any S3-compatible bucket** (`MEDIA_STORAGE`). Files stay behind the API, deletions are tracked by a database trigger, and `python -m app.scripts.move_media` moves existing files.
 - **Durable job queue** on PostgreSQL (`SKIP LOCKED`), run inline or as a separate worker.
 - **Security:** encrypted third-party credentials at rest, HttpOnly cookie sessions, OTP and password reset, sign-in throttling, and signed webhooks.
 - **Cost controls:** per-seller daily ceilings for AI replies, drafts, and receipt scans.
@@ -84,6 +91,8 @@ Every setting is documented in [`.env.example`](.env.example). The key ones:
 | `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_VISION_MODEL` | AI replies and receipt reading |
 | `META_APP_SECRET`, `META_VERIFY_TOKEN` | Facebook Messenger webhooks |
 | `JOB_RUNNER` | `inline`, or `worker` (run `python -m app.worker`) |
+| `BAKONG_API_URL`, `BAKONG_API_TOKEN` | Bakong Open API for KHQR payment checks (Cambodian IPs only; use a relay when hosted abroad) |
+| `MEDIA_STORAGE`, `S3_*` | `database`, or `s3` with a bucket for photos, QRs and attachments |
 | `AI_DAILY_REPLY_LIMIT`, `AI_DAILY_DRAFT_LIMIT`, `AI_DAILY_RECEIPT_LIMIT` | Per-seller daily AI spending ceilings |
 
 ### Running Tests

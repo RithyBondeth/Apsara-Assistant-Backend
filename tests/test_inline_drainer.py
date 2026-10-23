@@ -93,8 +93,9 @@ def test_the_drainer_runs_jobs_without_holding_up_requests(
         began = time.perf_counter()
         assert raw.get("/health").status_code == 200
         assert time.perf_counter() - began < 1.0
+        # Released before leaving the block: shutdown waits for the job.
+        release.set()
 
-    release.set()
     assert _wait_for(lambda: _job_status(db) == SUCCEEDED)
 
 

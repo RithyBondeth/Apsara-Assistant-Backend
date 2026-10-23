@@ -32,7 +32,7 @@ from app.models.attachment import Attachment
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.order import PAID, Order
-from app.services import ai_service
+from app.services import ai_service, storage
 from app.services.queue import enqueue, register
 from app.services.quota import spend_receipt
 from app.services.seller_alerts import alert_receipt
@@ -169,7 +169,8 @@ def mark_failed(attachment: Attachment, reason: str) -> None:
 def scan(db: Session, attachment: Attachment, user_id) -> None:
     """Read one attachment and record the outcome on it. Never raises: a
     failed read is itself a recorded outcome the seller can see and retry."""
-    if attachment.blob is None or not (attachment.file_type or "").startswith("image/"):
+    if (not (attachment.blob is not None or attachment.storage_key)
+            or not (attachment.file_type or "").startswith("image/")):
         mark_failed(attachment, "not an image")
         return
     if settings.AI_DAILY_RECEIPT_LIMIT <= 0:
@@ -179,7 +180,13 @@ def scan(db: Session, attachment: Attachment, user_id) -> None:
         mark_failed(attachment, "daily receipt limit reached")
         return
     try:
-        apply_reading(attachment, read_receipt(attachment.blob, attachment.file_type))
+        image = storage.read(attachment)
+    except storage.StorageError as exc:
+        # Not charged back: the scan was attempted, and a retry is one tap.
+        mark_failed(attachment, str(exc))
+        return
+    try:
+        apply_reading(attachment, read_receipt(image, attachment.file_type))
     except ai_service.AIError as exc:
         mark_failed(attachment, str(exc))
 

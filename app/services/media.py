@@ -43,6 +43,28 @@ def read_image_upload(upload: UploadFile) -> tuple[bytes, str, str]:
     return data, content_type, (upload.filename or "image")[:255]
 
 
+def store_or_503(row, kind: str, data: bytes, content_type: str) -> None:
+    """Store an upload's bytes, turning an unreachable bucket into a 503 the
+    seller can retry rather than a 500."""
+    from app.services import storage
+
+    try:
+        storage.store(row, kind, data, content_type)
+    except storage.StorageError:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Could not save the image right now. Please try again.")
+
+
+def read_or_503(row) -> bytes | None:
+    from app.services import storage
+
+    try:
+        return storage.read(row)
+    except storage.StorageError:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Media storage is unavailable")
+
+
 def public_media_url(kind: str, media_id) -> str:
     base = settings.API_BASE_URL.rstrip("/")
     return f"{base}/api/v1/media/{kind}/{media_id}"

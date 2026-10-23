@@ -1,6 +1,8 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-from app.api.v1.endpoints import attachments, auth, products, customers, conversations, orders, chat, webhooks, integrations, inventory, media, payment_qrs, operations
+from app.api.deps import require_owner
+
+from app.api.v1.endpoints import attachments, auth, products, customers, conversations, orders, chat, webhooks, integrations, inventory, media, payment_qrs, operations, events, staff
 
 api_router = APIRouter()
 
@@ -11,9 +13,13 @@ api_router.include_router(conversations.router, prefix="/conversations", tags=["
 api_router.include_router(orders.router, prefix="/orders", tags=["orders"])
 api_router.include_router(attachments.router, prefix="/attachments", tags=["attachments"])
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
-api_router.include_router(integrations.router, prefix="/integrations", tags=["integrations"])
+# Connecting a channel or Stripe hands over the shop's credentials: owner only.
+api_router.include_router(integrations.router, prefix="/integrations", tags=["integrations"],
+                          dependencies=[Depends(require_owner)])
+api_router.include_router(staff.router, prefix="/staff", tags=["staff"])
 api_router.include_router(inventory.router, prefix="/inventory", tags=["inventory"])
 api_router.include_router(payment_qrs.router, prefix="/payment-qrs", tags=["payment-qrs"])
 api_router.include_router(media.router, prefix="/media", tags=["media"])
 api_router.include_router(operations.router, prefix="/operations", tags=["operations"])
+api_router.include_router(events.router, prefix="/events", tags=["events"])
 api_router.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import get_current_user
+from app.api.deps import get_actor, get_current_user
 from app.database import get_db
 from app.models.product import Product
 from app.models.product_image import ProductImage
@@ -23,7 +23,7 @@ from app.schemas.product import (
 )
 from app.services.inventory import move_stock
 from app.services.alerts import evaluate_low_stock
-from app.services.media import MAX_PRODUCT_IMAGES, read_image_upload
+from app.services.media import MAX_PRODUCT_IMAGES, read_image_upload, store_or_503
 from app.services.variants import MAX_VARIANTS_PER_PRODUCT, clean_options, sync_product_totals
 
 router = APIRouter()
@@ -52,6 +52,7 @@ def create_product(
     payload: ProductCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     data = payload.model_dump(exclude={"variants"})
     opening_stock = data.pop("stock")
@@ -90,7 +91,7 @@ def create_product(
                     available_delta=stock,
                     kind="opening_balance",
                     reason="Opening balance",
-                    actor_user_id=current_user.id,
+                    actor_user_id=actor.id,
                 )
             else:
                 evaluate_low_stock(db, product, variant)
@@ -159,6 +160,7 @@ def create_product_variant(
     payload: ProductVariantCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     product = _owned_product_for_media(db, product_id, current_user.id)
     count = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).count()
@@ -190,7 +192,7 @@ def create_product_variant(
                 available_delta=payload.stock,
                 kind="opening_balance",
                 reason="Variant opening balance",
-                actor_user_id=current_user.id,
+                actor_user_id=actor.id,
             )
         else:
             evaluate_low_stock(db, product, variant)
@@ -298,16 +300,17 @@ def upload_product_images(
 
     uploads = [read_image_upload(file) for file in files]
     for offset, (blob, content_type, file_name) in enumerate(uploads):
-        db.add(ProductImage(
+        image = ProductImage(
             user_id=current_user.id,
             product_id=product.id,
-            blob=blob,
             content_type=content_type,
             file_name=file_name,
             file_size=len(blob),
             position=len(existing) + offset,
             is_primary=not existing and offset == 0,
-        ))
+        )
+        store_or_503(image, "product-images", blob, content_type)
+        db.add(image)
     db.commit()
     return (
         db.query(ProductImage)
@@ -417,6 +420,7 @@ def update_product(
     payload: ProductUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     product = db.query(Product).filter(
         Product.id == product_id, Product.user_id == current_user.id
@@ -442,7 +446,7 @@ def update_product(
             available_delta=requested_stock - variants[0].stock,
             kind="manual_adjustment",
             reason="Stock balance changed from product editor",
-            actor_user_id=current_user.id,
+            actor_user_id=actor.id,
         )
     if "price" in data and len(variants) == 1:
         variants[0].price = data["price"]

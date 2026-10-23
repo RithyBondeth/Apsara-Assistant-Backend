@@ -7,7 +7,7 @@ import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.deps import get_current_user
+from app.api.deps import get_actor, get_current_user
 from app.core.clock import utcnow
 from app.core.config import settings
 from app.database import get_db
@@ -24,7 +24,8 @@ from app.models.user import User
 from app.schemas.message import AttachmentOut, ReceiptOut
 from app.schemas.order import CheckoutOut, OrderCreate, OrderOut, OrderUpdate
 from app.services import stripe_gateway
-from app.services import receipts
+from app.services import customer_updates, khqr_orders, receipts
+from app.services import storage
 from app.services.inventory import (
     FULFILLED_STATUSES,
     RESERVING_STATUSES,
@@ -63,7 +64,7 @@ def _receipt_for_order(db: Session, order: Order, attachment_id: UUID,
             Attachment.id == attachment_id,
             Message.conversation_id == order.conversation_id,
             Message.sender_type == "customer",
-            Attachment.blob.isnot(None),
+            storage.has_content(Attachment),
         )
     )
     receipt = query.with_for_update().first() if lock else query.first()
@@ -301,10 +302,12 @@ def update_order(
     payload: OrderUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     order = _owned_order(db, order_id, current_user.id, lock=True)
 
     data = payload.model_dump(exclude_unset=True)
+    notify_customer = data.pop("notify_customer", True)
     new_status = data.get("status")
     if new_status is not None and new_status not in VALID_STATUSES:
         raise HTTPException(
@@ -317,24 +320,24 @@ def update_order(
     if new_status is not None and new_status != order.status:
         if new_status == "cancelled":
             release_order_stock(
-                db, order, kind="order_cancelled", actor_user_id=current_user.id
+                db, order, kind="order_cancelled", actor_user_id=actor.id
             )
         elif order.status == "cancelled":
             _deduct_order(
                 db,
                 order,
                 reserve=new_status in RESERVING_STATUSES,
-                actor_user_id=current_user.id,
+                actor_user_id=actor.id,
             )
         elif order.status in RESERVING_STATUSES and new_status in FULFILLED_STATUSES:
             _change_reserved_stock(
                 db, order, delta_sign=-1, kind="reservation_fulfilled",
-                actor_user_id=current_user.id,
+                actor_user_id=actor.id,
             )
         elif order.status in FULFILLED_STATUSES and new_status in RESERVING_STATUSES:
             _change_reserved_stock(
                 db, order, delta_sign=1, kind="reservation_restored",
-                actor_user_id=current_user.id,
+                actor_user_id=actor.id,
             )
 
         if new_status == "pending":
@@ -342,8 +345,11 @@ def update_order(
         elif new_status != "cancelled":
             order.reservation_expires_at = None
 
+    changed_status = new_status is not None and new_status != order.status
     for field, value in data.items():
         setattr(order, field, value)
+    if changed_status and notify_customer:
+        customer_updates.notify(db, order, new_status)
     db.commit()
     db.refresh(order)
     return order
@@ -437,6 +443,44 @@ def _with_verdict(db: Session, receipt: Attachment, order: Order) -> ReceiptOut:
     return out
 
 
+@router.post("/{order_id}/khqr", response_model=OrderOut)
+def issue_order_khqr(
+    order_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Give the order a dynamic KHQR for its exact total, or return the one
+    still payable. Bakong is then checked until it is paid or expires."""
+    order = _owned_order(db, order_id, current_user.id, lock=True)
+    try:
+        khqr_orders.issue(db, order, current_user)
+    except khqr_orders.NotAvailable as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+@router.post("/{order_id}/khqr/check", response_model=OrderOut)
+def check_order_khqr(
+    order_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Ask Bakong now, rather than waiting for the next scheduled look."""
+    order = _owned_order(db, order_id, current_user.id, lock=True)
+    if not order.khqr_md5:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="This order has no KHQR to check")
+    result = khqr_orders.check_now(db, order, current_user)
+    db.commit()
+    if result.outcome == "unavailable":
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=result.detail or "Bakong is unavailable")
+    db.refresh(order)
+    return order
+
+
 @router.get("/{order_id}/receipts", response_model=list[ReceiptOut])
 def list_order_receipts(
     order_id: UUID,
@@ -452,7 +496,7 @@ def list_order_receipts(
         .filter(
             Message.conversation_id == order.conversation_id,
             Message.sender_type == "customer",
-            Attachment.blob.isnot(None),
+            storage.has_content(Attachment),
         )
         .order_by(Attachment.created_at.desc())
         .all()
@@ -488,6 +532,7 @@ def confirm_order_receipt(
     attachment_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     order = _owned_order(db, order_id, current_user.id, lock=True)
     if order.status == "cancelled":
@@ -511,11 +556,11 @@ def confirm_order_receipt(
     now = utcnow()
     receipt.review_status = "accepted"
     receipt.reviewed_at = now
-    receipt.reviewed_by_user_id = current_user.id
+    receipt.reviewed_by_user_id = actor.id
     order.payment_status = PAID
     order.payment_method = "qr"
     order.payment_receipt_attachment_id = receipt.id
-    order.payment_confirmed_by_user_id = current_user.id
+    order.payment_confirmed_by_user_id = actor.id
     order.paid_at = now
     # What the receipt said was paid, if it was read; the seller confirming
     # is what makes it true, the reading is what makes it a number.
@@ -525,6 +570,7 @@ def confirm_order_receipt(
     else:
         order.paid_amount = order.total_amount
         order.paid_currency = order.currency
+    customer_updates.notify(db, order, customer_updates.PAID)
     db.commit()
     db.refresh(order)
     return order
@@ -536,6 +582,7 @@ def reject_order_receipt(
     attachment_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     order = _owned_order(db, order_id, current_user.id, lock=True)
     receipt = _receipt_for_order(db, order, attachment_id, lock=True)
@@ -544,7 +591,7 @@ def reject_order_receipt(
                             detail="A confirmed payment receipt cannot be rejected")
     receipt.review_status = "rejected"
     receipt.reviewed_at = utcnow()
-    receipt.reviewed_by_user_id = current_user.id
+    receipt.reviewed_by_user_id = actor.id
     db.commit()
     db.refresh(receipt)
     return receipt
@@ -555,13 +602,14 @@ def delete_order(
     order_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
     order = _owned_order(db, order_id, current_user.id, lock=True)
 
     # A cancelled order has already had its stock returned; don't restock twice.
     if order.status != "cancelled":
         release_order_stock(
-            db, order, kind="order_deleted", actor_user_id=current_user.id
+            db, order, kind="order_deleted", actor_user_id=actor.id
         )
 
     db.delete(order)

@@ -1,6 +1,8 @@
 -r requirements.txt
 
 pytest==8.3.4
+# In-process S3 for the object storage tests.
+moto[s3]==5.0.28
 
 # Optional: error tracking. The app runs without it.
 sentry-sdk==2.20.0

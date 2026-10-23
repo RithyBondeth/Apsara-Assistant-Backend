@@ -6,6 +6,7 @@ from sqlalchemy.orm import relationship
 
 from app.core.clock import utcnow
 from app.database import Base
+from app.services.realtime import notify_on_change
 
 # status: open, closed, pending
 # platform: messenger, telegram, tiktok, website
@@ -53,6 +54,10 @@ class Conversation(Base):
     customer = relationship("Customer", back_populates="conversations")
     platform_connection = relationship("PlatformConnection")
     assigned_user = relationship("User", foreign_keys=[assigned_user_id])
+
+    @property
+    def assigned_user_name(self) -> str | None:
+        return self.assigned_user.full_name if self.assigned_user else None
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="conversation")
     notes = relationship(
@@ -98,3 +103,6 @@ class ConversationTag(Base):
     created_at = Column(DateTime, nullable=False, default=utcnow)
 
     conversation = relationship("Conversation", back_populates="tags")
+
+
+notify_on_change(Conversation.__table__)

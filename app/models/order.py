@@ -1,11 +1,12 @@
 import uuid
 
 from sqlalchemy import Column, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.core.clock import utcnow
 from app.database import Base
+from app.services.realtime import notify_on_change
 
 # status: pending, confirmed, processing, shipped, delivered, cancelled
 # payment_status: unpaid, pending, paid
@@ -57,6 +58,25 @@ class Order(Base):
     # a riel payment on a dollar order is a fact the books need.
     paid_amount = Column(Numeric(12, 2))
     paid_currency = Column(String(3))
+    # Order events the customer has been told about, so a redelivered job or
+    # a status set twice never sends the same message again.
+    customer_notified_events = Column(JSONB, nullable=False, default=list, server_default="[]")
+    # The order's dynamic KHQR, if one was issued — see app/services/khqr.py.
+    # The MD5 of the text is what Bakong is asked about.
+    khqr_payload = Column(Text)
+    khqr_md5 = Column(String(32), index=True)
+    khqr_expires_at = Column(DateTime)
+    # issued, paid, expired, mismatch
+    khqr_status = Column(String(16))
+    khqr_checked_at = Column(DateTime)
+    @property
+    def khqr_image_url(self) -> str | None:
+        if not self.khqr_md5:
+            return None
+        from app.services.khqr_orders import image_url
+
+        return image_url(self)
+
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -65,3 +85,6 @@ class Order(Base):
     conversation = relationship("Conversation", back_populates="orders")
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     inventory_movements = relationship("InventoryMovement", back_populates="order")
+
+
+notify_on_change(Order.__table__)

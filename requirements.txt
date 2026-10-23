@@ -21,3 +21,7 @@ openai==1.57.4
 # configured globally here — see app/services/stripe_gateway.py.
 stripe==11.4.1
 httpx==0.28.1
+# Media in an S3-compatible bucket (MEDIA_STORAGE=s3). Loaded only in that mode.
+boto3==1.35.86
+# Renders dynamic KHQR codes as PNG. Pure Python, no imaging library.
+segno==1.6.6

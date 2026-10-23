@@ -2,8 +2,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_actor, get_current_user, require_owner
 from app.core.config import settings
+from app.core.crypto import encrypt
 from app.core.security import create_access_token, hash_password, verify_password
 from app.database import get_db
 from app.models.user import User
@@ -82,9 +83,25 @@ def login(
     return Token(access_token=token)
 
 
+def _me(shop: User, actor: User) -> UserOut:
+    """The shop's settings, and who is looking at them."""
+    return UserOut.model_validate(shop).model_copy(update={
+        "role": actor.role,
+        "member_id": actor.id,
+        "member_name": actor.full_name,
+        "member_email": actor.email,
+    })
+
+
+# What a staff member may change about themselves. Everything else on this
+# endpoint is the shop's, and the owner's to change.
+STAFF_EDITABLE = {"full_name", "language"}
+
+
 @router.get("/me", response_model=UserOut)
-def get_me(current_user: User = Depends(get_current_user)):
-    return current_user
+def get_me(current_user: User = Depends(get_current_user),
+           actor: User = Depends(get_actor)):
+    return _me(current_user, actor)
 
 
 @router.patch("/me", response_model=UserOut)
@@ -92,12 +109,27 @@ def update_me(
     payload: UserUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    actor: User = Depends(get_actor),
 ):
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if actor.shop_id is not None:
+        if set(data) - STAFF_EDITABLE:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Only the shop owner can change shop settings")
+        for field, value in data.items():
+            setattr(actor, field, value)
+        db.commit()
+        db.refresh(current_user)
+        db.refresh(actor)
+        return _me(current_user, actor)
+    if "bakong_api_token" in data:
+        token = (data.pop("bakong_api_token") or "").strip()
+        current_user.bakong_api_token = encrypt(token) if token else None
+    for field, value in data.items():
         setattr(current_user, field, value)
     db.commit()
     db.refresh(current_user)
-    return current_user
+    return _me(current_user, actor)
 
 
 # ── Telegram alerts ──────────────────────────────────────────────────────────
@@ -105,7 +137,7 @@ def update_me(
 @router.post("/telegram-link", response_model=TelegramLinkOut)
 def start_telegram_link(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_owner),
 ):
     """A link the seller opens on their phone to receive alerts from their bot.
 
@@ -135,14 +167,14 @@ def start_telegram_link(
 @router.delete("/telegram-link", response_model=UserOut)
 def unlink_telegram(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_owner),
 ):
     current_user.telegram_chat_id = None
     current_user.telegram_chat_name = None
     current_user.telegram_linked_at = None
     db.commit()
     db.refresh(current_user)
-    return current_user
+    return _me(current_user, current_user)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

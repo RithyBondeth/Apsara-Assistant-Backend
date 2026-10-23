@@ -42,6 +42,35 @@ class UserUpdate(BaseModel):
     low_stock_telegram_enabled: bool | None = None
     attention_telegram_enabled: bool | None = None
     payment_telegram_enabled: bool | None = None
+    customer_updates_enabled: bool | None = None
+    khqr_enabled: bool | None = None
+    bakong_account_id: str | None = Field(default=None, max_length=64)
+    khqr_merchant_name: str | None = Field(default=None, max_length=25)
+    khqr_merchant_city: str | None = Field(default=None, max_length=15)
+    khqr_merchant_id: str | None = Field(default=None, max_length=32)
+    khqr_acquiring_bank: str | None = Field(default=None, max_length=32)
+    # Write-only: stored encrypted, never returned. An empty string clears it.
+    bakong_api_token: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("bakong_account_id")
+    @classmethod
+    def _bakong_account(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip()
+        if "@" not in value or value.startswith("@") or value.endswith("@"):
+            raise ValueError("A Bakong account ID looks like yourname@bank")
+        return value
+
+    @field_validator("khqr_merchant_name", "khqr_merchant_city")
+    @classmethod
+    def _latin(cls, value: str | None) -> str | None:
+        """Bank apps show these from Latin text; Khmer would arrive blank."""
+        if value is None or not value.strip():
+            return None
+        if any(not (32 <= ord(ch) < 127) for ch in value):
+            raise ValueError("Use Latin letters — bank apps cannot show Khmer here")
+        return value.strip()
 
     @field_validator("payment_qr_url")
     @classmethod
@@ -90,6 +119,19 @@ class UserOut(BaseModel):
     low_stock_telegram_enabled: bool
     attention_telegram_enabled: bool
     payment_telegram_enabled: bool
+    customer_updates_enabled: bool = True
+    khqr_enabled: bool = False
+    bakong_account_id: str | None = None
+    khqr_merchant_name: str | None = None
+    khqr_merchant_city: str | None = None
+    khqr_merchant_id: str | None = None
+    khqr_acquiring_bank: str | None = None
+    bakong_token_set: bool = False
+    # Who is signed in: the owner, or a staff member working this shop.
+    role: str = "owner"
+    member_id: UUID | None = None
+    member_name: str | None = None
+    member_email: str | None = None
     telegram_chat_id: str | None
     telegram_chat_name: str | None
     telegram_linked_at: datetime | None

@@ -17,6 +17,8 @@ from app.services import inbound  # noqa: F401
 from app.services import alerts  # noqa: F401
 from app.services import seller_alerts  # noqa: F401
 from app.services import receipts  # noqa: F401
+from app.services import customer_updates  # noqa: F401
+from app.services import khqr_orders  # noqa: F401
 from app.services.queue import work
 
 from app.core.logging import configure as configure_logging
@@ -38,6 +40,7 @@ def _on_signal(signum, _frame):
 
 
 def main() -> None:
+    settings.check_media_storage()
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
