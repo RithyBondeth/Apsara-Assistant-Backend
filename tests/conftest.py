@@ -32,7 +32,7 @@ from app.core import security  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.services import queue  # noqa: E402
+from app.services import queue, realtime  # noqa: E402
 
 PASSWORD = "secret123"
 
@@ -64,6 +64,8 @@ def _no_drainer_thread(monkeypatch):
     """Keep the inline drainer thread out of tests: it would race every
     assertion made about the queue. test_inline_drainer starts it on purpose."""
     monkeypatch.setattr(queue, "start_drainer", lambda: None)
+    # Likewise the LISTEN thread; test_realtime starts it when it needs it.
+    monkeypatch.setattr(realtime, "start", lambda: None)
 
 
 class _DrainAfterRequest:
