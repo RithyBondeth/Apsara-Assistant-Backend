@@ -44,7 +44,7 @@ from app.services.platforms import (
     send_reply,
 )
 from app.services.queue import register
-from app.services import catalogue, storage
+from app.services import catalogue, khqr_orders, storage
 from app.services.quota import spend_reply
 from app.services.payment_qrs import default_payment_qr_url
 from app.services.receipts import queue_scan
@@ -421,5 +421,20 @@ def _generate(db: Session, connection: PlatformConnection,
     reply, photos = split_photos(reply, selection.products)
     # Guarded against the seller having cleared their QR since the prompt was
     # built, and against a model that emits the marker regardless.
-    return (reply, default_payment_qr_url(seller) if wants_qr else None,
+    return (reply, _payment_qr(db, seller, conversation) if wants_qr else None,
             wants_seller, photos)
+
+
+def _payment_qr(db: Session, seller: User, conversation: Conversation) -> str | None:
+    """A dynamic KHQR for the order awaiting payment when the shop has KHQR,
+    so the customer's app fills in the amount and Bakong confirms it; else
+    the shop's static QR."""
+    if khqr_orders.enabled(seller):
+        order = _order_awaiting_payment(db, conversation)
+        if order is not None:
+            try:
+                khqr_orders.issue(db, order, seller)
+                return khqr_orders.image_url(order)
+            except khqr_orders.NotAvailable as exc:
+                logger.warning("No KHQR for order %s: %s", order.id, exc)
+    return default_payment_qr_url(seller)

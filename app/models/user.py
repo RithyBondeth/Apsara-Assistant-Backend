@@ -49,6 +49,16 @@ class User(Base):
     # Message the customer when their order is confirmed, shipped, delivered,
     # cancelled or paid — see app/services/customer_updates.py.
     customer_updates_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
+    # Dynamic KHQR. The Bakong account ID is the shop's own (name@bank); the
+    # merchant ID and acquiring bank only for a bank-registered merchant. The
+    # Bakong Open API token is encrypted like every third-party credential.
+    khqr_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    bakong_account_id = Column(String(64))
+    khqr_merchant_name = Column(String(25))
+    khqr_merchant_city = Column(String(15))
+    khqr_merchant_id = Column(String(32))
+    khqr_acquiring_bank = Column(String(32))
+    bakong_api_token = Column(Text)
     # The seller's own chat with their connected bot, where every Telegram
     # alert goes. Filled in by the bot itself when the seller opens the link
     # from Settings — nobody should have to find a numeric chat id by hand.
@@ -58,6 +68,10 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+    @property
+    def bakong_token_set(self) -> bool:
+        return bool(self.bakong_api_token)
 
     customers = relationship("Customer", back_populates="user")
     products = relationship("Product", back_populates="user")

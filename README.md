@@ -29,6 +29,7 @@ This repository is the FastAPI backend. The seller dashboard lives in [Apsara-As
 - **Unified inbox** for Facebook Messenger and Telegram, with idempotent message handling and a manual-mode takeover.
 - **Orders and payments.** AI order drafts, Stripe Checkout with each seller's own account, and payment-QR support for sellers who cannot use Stripe.
 - **Order updates to the customer.** Confirmed, shipped, delivered, cancelled and paid each send the customer one message in their thread, in Khmer or English. Each is sent once, can be skipped per change (`notify_customer: false`), and can be turned off per shop (`customer_updates_enabled`).
+- **Dynamic KHQR with Bakong confirmation.** Each order can get a KHQR for its exact amount and currency. The assistant sends it in place of the static QR when an order is awaiting payment, and the order is marked paid as soon as Bakong reports the transaction (checked by the MD5 of the code).
 - **Receipt verification.** A vision model reads customer receipt photos and returns a verdict against the order: `match`, `amount_mismatch`, `duplicate`, and others.
 - **Dual currency (USD/KHR)** at each shop's own exchange rate.
 - **Seller alerts** sent to the seller's phone through Telegram, once per episode, in the seller's language.
@@ -88,6 +89,7 @@ Every setting is documented in [`.env.example`](.env.example). The key ones:
 | `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_VISION_MODEL` | AI replies and receipt reading |
 | `META_APP_SECRET`, `META_VERIFY_TOKEN` | Facebook Messenger webhooks |
 | `JOB_RUNNER` | `inline`, or `worker` (run `python -m app.worker`) |
+| `BAKONG_API_URL`, `BAKONG_API_TOKEN` | Bakong Open API for KHQR payment checks (Cambodian IPs only; use a relay when hosted abroad) |
 | `MEDIA_STORAGE`, `S3_*` | `database`, or `s3` with a bucket for photos, QRs and attachments |
 | `AI_DAILY_REPLY_LIMIT`, `AI_DAILY_DRAFT_LIMIT`, `AI_DAILY_RECEIPT_LIMIT` | Per-seller daily AI spending ceilings |
 
