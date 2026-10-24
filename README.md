@@ -91,6 +91,7 @@ Every setting is documented in [`.env.example`](.env.example). The key ones:
 | `SECRET_KEY` | Signs tokens and derives the credential-encryption key |
 | `CORS_ORIGINS` | Allowed web origins (required outside development) |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT` | AI replies, order drafts and receipt reading |
+| `AI_FAKE` | `true` for canned AI answers without a key — development only |
 | `META_APP_SECRET`, `META_VERIFY_TOKEN` | Facebook Messenger webhooks |
 | `JOB_RUNNER` | `inline`, or `worker` (run `python -m app.worker`) |
 | `BAKONG_API_URL`, `BAKONG_API_TOKEN` | Bakong Open API for KHQR payment checks (Cambodian IPs only; use a relay when hosted abroad) |

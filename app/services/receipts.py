@@ -103,7 +103,7 @@ anything else — set is_receipt to false and every other field to null."""
 
 def read_receipt(image_bytes: bytes, content_type: str) -> ReceiptReading:
     """Ask the model. Raises `ai_service.AIError` on any failure."""
-    if not settings.ANTHROPIC_API_KEY:
+    if not ai_service.configured():
         raise ai_service.AIError("Receipt reading is not configured. Set ANTHROPIC_API_KEY.")
     try:
         response = ai_service.create(

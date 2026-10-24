@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # How hard the model thinks before answering: low, medium, high, xhigh or
     # max. Lower is faster and cheaper; medium is the model's own default.
     ANTHROPIC_EFFORT: str = "medium"
+    # Local development only: answer with canned replies, order drafts and
+    # receipt readings instead of calling Claude, so the app can be clicked
+    # through without a key. Refused anywhere but ENVIRONMENT=development.
+    AI_FAKE: bool = False
 
     # Where the web app is reachable — used to build password reset links.
     APP_BASE_URL: str = "http://localhost:3000"
@@ -171,6 +175,12 @@ class Settings(BaseSettings):
             raise RuntimeError("MEDIA_STORAGE=s3 needs S3_BUCKET set.")
         if self.MEDIA_STORAGE.lower() not in ("s3", "database"):
             raise RuntimeError("MEDIA_STORAGE must be 'database' or 's3'.")
+
+    def check_ai(self) -> None:
+        """Refuse to start with the demo stand-in anywhere customers could be
+        answered by it."""
+        if self.AI_FAKE and self.ENVIRONMENT != "development":
+            raise RuntimeError("AI_FAKE is for local development only; unset it.")
 
     model_config = SettingsConfigDict(env_file=".env")
 

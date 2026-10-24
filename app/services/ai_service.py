@@ -90,14 +90,22 @@ class ExtractedOrderDraft(BaseModel):
     notes: str | None = Field(max_length=2000)
 
 
+def configured() -> bool:
+    """Whether model calls can be made: a key, or the local demo stand-in."""
+    return bool(settings.ANTHROPIC_API_KEY) or settings.AI_FAKE
+
+
 @lru_cache(maxsize=1)
 def _client() -> Anthropic:
-    """The shared Anthropic client.
+    """The shared Anthropic client, or the demo stand-in under AI_FAKE.
 
     Built once and reused so replies do not pay for a fresh connection pool on
     every message. Constructed lazily rather than at import so the app still
     starts without a key configured.
     """
+    if settings.AI_FAKE:
+        from app.services.fake_ai import FakeClient
+        return FakeClient()
     return Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
 
@@ -499,7 +507,7 @@ def generate_ai_reply(request: dict) -> str:
     so the endpoint is a `def` that FastAPI runs in its threadpool. Awaiting
     here inside an `async def` would put blocking DB calls on the event loop.
     """
-    if not settings.ANTHROPIC_API_KEY:
+    if not configured():
         raise AIError("AI replies are not configured. Set ANTHROPIC_API_KEY on the server.")
 
     try:
@@ -518,7 +526,7 @@ def generate_ai_reply(request: dict) -> str:
 
 def generate_order_draft(request: dict) -> ExtractedOrderDraft:
     """Generate a strict, schema-bound order proposal from a conversation."""
-    if not settings.ANTHROPIC_API_KEY:
+    if not configured():
         raise AIError("AI drafts are not configured. Set ANTHROPIC_API_KEY on the server.")
 
     try:

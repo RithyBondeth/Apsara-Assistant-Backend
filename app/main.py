@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings.check_media_storage()
+    settings.check_ai()
     # Small installations deliberately run without a separate worker; the
     # API runs the queue on a thread of its own instead. Production
     # deployments use JOB_RUNNER=worker and start nothing here.
