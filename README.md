@@ -8,7 +8,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-D71F00?style=for-the-badge&logo=sqlalchemy&logoColor=white)
-![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=for-the-badge&logo=openai&logoColor=white)
+![Claude](https://img.shields.io/badge/Claude-D97757?style=for-the-badge&logo=anthropic&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 
 </div>
@@ -51,7 +51,7 @@ This repository is the FastAPI backend. The seller dashboard lives in [Apsara-As
 | Language | Python 3.12 |
 | Framework | FastAPI, Uvicorn |
 | Database | PostgreSQL 16, SQLAlchemy, Alembic |
-| AI | OpenAI (chat and vision models) |
+| AI | Anthropic Claude API (replies, order drafts, receipt reading) |
 | Integrations | Facebook Messenger, Telegram Bot API, Stripe Checkout, SMTP |
 | Infrastructure | Docker, Docker Compose, GitHub Actions CI |
 | Testing | Pytest against a real PostgreSQL database |
@@ -90,7 +90,7 @@ Every setting is documented in [`.env.example`](.env.example). The key ones:
 | `DATABASE_URL` | PostgreSQL connection string |
 | `SECRET_KEY` | Signs tokens and derives the credential-encryption key |
 | `CORS_ORIGINS` | Allowed web origins (required outside development) |
-| `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_VISION_MODEL` | AI replies and receipt reading |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT` | AI replies, order drafts and receipt reading |
 | `META_APP_SECRET`, `META_VERIFY_TOKEN` | Facebook Messenger webhooks |
 | `JOB_RUNNER` | `inline`, or `worker` (run `python -m app.worker`) |
 | `BAKONG_API_URL`, `BAKONG_API_TOKEN` | Bakong Open API for KHQR payment checks (Cambodian IPs only; use a relay when hosted abroad) |

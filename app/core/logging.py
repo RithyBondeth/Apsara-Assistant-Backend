@@ -1,7 +1,7 @@
 """Logging setup.
 
 Modules across the app call `logger.exception(...)` on failures they deliberately
-swallow — a mail server that will not answer, an OpenAI outage, a reply a
+swallow — a mail server that will not answer, a Claude API outage, a reply a
 platform refused. Until this existed none of that was configured, so those calls
 landed on stderr at the root logger's default level with no timestamp we
 controlled and no way to raise or lower verbosity. The decision to log a failure

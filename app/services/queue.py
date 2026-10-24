@@ -1,7 +1,7 @@
 """A small durable job queue on top of Postgres.
 
 Webhook handlers must answer quickly — a platform that does not get a prompt 2xx
-retries — but the work they trigger includes an OpenAI round trip. Previously
+retries — but the work they trigger includes a Claude API round trip. Previously
 that ran in a FastAPI BackgroundTask, which meant a restart mid-flight dropped a
 customer's message on the floor with nothing left to show it had happened.
 
@@ -227,7 +227,7 @@ def work(stop: threading.Event, wake_event: threading.Event | None = None) -> No
 
 
 # JOB_RUNNER=inline runs `work` on a thread of the API process. Not in the
-# request: a webhook answered only after its own OpenAI round trip — or after
+# request: a webhook answered only after its own Claude API round trip — or after
 # everyone else's queued ahead of it — is a webhook the platform retries, and
 # a synchronous drain in async middleware stalls every other request with it.
 _stop = threading.Event()

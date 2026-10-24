@@ -17,7 +17,7 @@ from app.services.quota import spend_draft, spend_reply
 from app.services.ai_service import (
     HISTORY_LIMIT,
     AIError,
-    build_openai_messages,
+    build_messages,
     build_order_draft_messages,
     build_system_prompt,
     generate_ai_reply,
@@ -213,7 +213,7 @@ def chat(
         catalogue_note=catalogue.name_index_section(selection),
     )
     try:
-        raw_reply = generate_ai_reply(build_openai_messages(system_prompt, history))
+        raw_reply = generate_ai_reply(build_messages(system_prompt, history))
     except AIError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

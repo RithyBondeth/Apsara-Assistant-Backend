@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from uuid import UUID
 
-from openai import OpenAIError
+import anthropic
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.orm import Session
 
@@ -76,7 +76,7 @@ class ReceiptReading(BaseModel):
     paid_at: str | None
 
 
-def build_receipt_messages(image_bytes: bytes, content_type: str) -> list[dict]:
+def build_receipt_messages(image_bytes: bytes, content_type: str) -> dict:
     encoded = base64.b64encode(image_bytes).decode("ascii")
     system = """You read payment receipts from Cambodian banking and wallet apps —
 ABA, ACLEDA, Wing, TrueMoney, Bakong KHQR, Canadia, Prince and similar — sent
@@ -90,40 +90,33 @@ character. `bank` is the app or bank name. `payer` is the sender's name,
 `payee` the receiver's. `paid_at` is the date and time as printed. If the
 image is not a payment receipt at all — a product photo, a chat screenshot,
 anything else — set is_receipt to false and every other field to null."""
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": [
-            {"type": "text", "text": "Read this receipt."},
-            {"type": "image_url", "image_url": {
-                "url": f"data:{content_type};base64,{encoded}", "detail": "auto",
+    return {
+        "system": system,
+        "messages": [{"role": "user", "content": [
+            {"type": "image", "source": {
+                "type": "base64", "media_type": content_type, "data": encoded,
             }},
-        ]},
-    ]
+            {"type": "text", "text": "Read this receipt."},
+        ]}],
+    }
 
 
 def read_receipt(image_bytes: bytes, content_type: str) -> ReceiptReading:
     """Ask the model. Raises `ai_service.AIError` on any failure."""
-    if not settings.OPENAI_API_KEY:
-        raise ai_service.AIError("Receipt reading is not configured. Set OPENAI_API_KEY.")
-    schema = ReceiptReading.model_json_schema()
+    if not settings.ANTHROPIC_API_KEY:
+        raise ai_service.AIError("Receipt reading is not configured. Set ANTHROPIC_API_KEY.")
     try:
-        response = ai_service._client().chat.completions.create(
-            model=settings.OPENAI_VISION_MODEL,
-            messages=build_receipt_messages(image_bytes, content_type),
-            temperature=0,
-            max_tokens=400,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": "receipt", "strict": True, "schema": schema},
-            },
+        response = ai_service.create(
+            build_receipt_messages(image_bytes, content_type),
+            output_config=ai_service.json_output(ReceiptReading),
         )
-        content = response.choices[0].message.content
+        content = ai_service.response_text(response)
         if not content:
             raise ai_service.AIError("The model returned nothing for the receipt.")
         return ReceiptReading.model_validate_json(content)
     except ai_service.AIError:
         raise
-    except (OpenAIError, ValidationError, AttributeError, IndexError, TypeError) as exc:
+    except (anthropic.APIError, ValidationError, AttributeError, IndexError, TypeError) as exc:
         logger.exception("Receipt reading failed")
         raise ai_service.AIError("The receipt could not be read right now.") from exc
 

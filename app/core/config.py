@@ -25,11 +25,12 @@ class Settings(BaseSettings):
     AUTH_COOKIE_NAME: str = "apsara_access_token"
     AUTH_COOKIE_SECURE: bool = False
 
-    OPENAI_API_KEY: str = ""
-    OPENAI_MODEL: str = "gpt-4o-mini"
-    # Reads customer receipt screenshots. Any vision-capable model; the
-    # default is the cheapest that reads Khmer bank apps reliably.
-    OPENAI_VISION_MODEL: str = "gpt-4o-mini"
+    # Answers customers, drafts orders and reads receipt screenshots.
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_MODEL: str = "claude-opus-5-5"
+    # How hard the model thinks before answering: low, medium, high, xhigh or
+    # max. Lower is faster and cheaper; medium is the model's own default.
+    ANTHROPIC_EFFORT: str = "medium"
 
     # Where the web app is reachable — used to build password reset links.
     APP_BASE_URL: str = "http://localhost:3000"
