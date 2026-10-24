@@ -22,7 +22,7 @@ from app.models.user import User
 from app.services.ai_service import (
     HISTORY_LIMIT,
     AIError,
-    build_openai_messages,
+    build_messages,
     build_system_prompt,
     generate_ai_reply,
     payment_qr_message,
@@ -412,7 +412,7 @@ def _generate(db: Session, connection: PlatformConnection,
 
     try:
         raw = generate_ai_reply(
-            build_openai_messages(
+            build_messages(
                 build_system_prompt(seller, selection.products,
                                     catalogue_note=catalogue.name_index_section(selection)),
                 history,

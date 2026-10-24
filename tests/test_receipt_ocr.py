@@ -1,9 +1,10 @@
 """Reading customer receipts, and judging them against the order."""
 
+import base64
 import json
 from unittest import mock
 
-from openai import APIConnectionError
+from anthropic import APIConnectionError
 
 from app.core.config import settings
 from app.models.attachment import Attachment
@@ -61,11 +62,12 @@ def test_a_matching_receipt_is_read_and_the_alert_says_so(client, seller, db):
     with wh.sends(), alerts() as to_seller, ai.replies(reading()) as captured:
         send_photo(client, integration)
 
-    # The image went to the vision model as a data URI, with strict output.
-    assert captured["model"] == settings.OPENAI_VISION_MODEL
-    image = captured["messages"][1]["content"][1]["image_url"]["url"]
-    assert image.startswith("data:image/jpeg;base64,")
-    assert captured["response_format"]["json_schema"]["strict"] is True
+    # The image went to the model as base64, with schema-bound output.
+    assert captured["model"] == settings.ANTHROPIC_MODEL
+    image = captured["messages"][0]["content"][0]["source"]
+    assert (image["type"], image["media_type"]) == ("base64", "image/jpeg")
+    assert base64.b64decode(image["data"]) == b"receipt-bytes"
+    assert captured["output_config"]["format"]["type"] == "json_schema"
 
     [alert] = to_seller
     assert "✅ Receipt reads 8.00 USD — matches" in alert["text"]

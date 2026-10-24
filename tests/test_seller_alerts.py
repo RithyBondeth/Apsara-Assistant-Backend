@@ -3,7 +3,7 @@
 from contextlib import contextmanager
 from unittest import mock
 
-from openai import APIConnectionError
+from anthropic import APIConnectionError
 
 from app.models.conversation import Conversation
 from app.models.customer import Customer

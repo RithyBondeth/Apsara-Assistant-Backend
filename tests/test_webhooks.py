@@ -294,7 +294,7 @@ def test_auto_reply_off_records_without_answering(client, seller, db):
 
 
 def test_an_ai_outage_still_records_the_customer(client, seller, db):
-    from openai import APIConnectionError
+    from anthropic import APIConnectionError
     wh.connect(client, seller, external_id="page-1")
 
     with wh.sends() as sent, ai.fails(APIConnectionError(request=None)):

@@ -109,7 +109,7 @@ def test_a_refused_reply_still_leaves_the_message(client, seller, limit):
 def test_a_failed_generation_still_costs(client, seller, db, limit):
     """The spend happens on asking, not on succeeding — otherwise a model that
     keeps erroring is an uncapped bill."""
-    from openai import APIConnectionError
+    from anthropic import APIConnectionError
     limit(10)
     conversation = seller.conversation()
     user_id = client.get("/api/v1/auth/me", headers=seller.headers).json()["id"]

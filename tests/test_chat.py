@@ -3,7 +3,7 @@
 import uuid
 
 import pytest
-from openai import APIConnectionError
+from anthropic import APIConnectionError
 
 from app.services import ai_service
 from tests import ai
@@ -73,7 +73,7 @@ def test_prompt_carries_the_sellers_catalogue(client, seller):
     assert "• Silk Scarf — 12.50" in captured.system_prompt
     assert "Hand-woven" in captured.system_prompt
     assert "OUT OF STOCK" in captured.system_prompt
-    assert captured["model"] == "gpt-4o-mini"
+    assert captured["model"] == "claude-opus-5-5"
 
 
 def test_prompt_does_not_branch_on_a_guess_at_the_language(client, seller):
@@ -136,10 +136,13 @@ def test_history_is_bounded(client, seller):
             client.post(f"/api/v1/chat/{conversation['id']}", json={"message": f"msg {i}"},
                         headers=seller.headers)
 
-    assert len(captured["messages"]) == ai_service.HISTORY_LIMIT + 1
+    turns = [t for t in captured.turns if t["content"] != ai_service.SHOP_SPOKE_FIRST]
+    assert len(turns) == ai_service.HISTORY_LIMIT
     assert captured.turns[-1]["content"] == f"msg {HISTORY_TURNS - 1}"
-    # A window may open on either role, but turns must alternate.
+    # A window may open on either role, but the customer speaks first and
+    # turns must alternate.
     roles = [t["role"] for t in captured.turns]
+    assert roles[0] == "user"
     assert all(a != b for a, b in zip(roles, roles[1:]))
 
 
@@ -156,7 +159,10 @@ def test_seller_messages_read_as_the_assistants_own_voice(client, seller, db):
         client.post(f"/api/v1/chat/{conversation['id']}", json={"message": "thanks"},
                     headers=seller.headers)
 
-    assert captured.turns[0] == {"role": "assistant", "content": "we also do delivery"}
+    assert captured.turns[:2] == [
+        {"role": "user", "content": ai_service.SHOP_SPOKE_FIRST},
+        {"role": "assistant", "content": "we also do delivery"},
+    ]
 
 
 # ── Failure handling ─────────────────────────────────────────────────────────
@@ -186,19 +192,19 @@ def test_upstream_error_text_never_reaches_the_client(client, seller):
                         headers=seller.headers)
 
     assert secret not in r.text
-    assert "openai" not in r.text.lower()
+    assert "anthropic" not in r.text.lower()
     assert r.json()["detail"] == "The AI assistant is unavailable right now. Please try again."
 
 
 def test_missing_api_key_is_a_503_not_a_500(client, seller, monkeypatch):
     conversation = seller.conversation()
-    monkeypatch.setattr(ai_service.settings, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(ai_service.settings, "ANTHROPIC_API_KEY", "")
 
     r = client.post(f"/api/v1/chat/{conversation['id']}", json={"message": "hi"},
                     headers=seller.headers)
 
     assert r.status_code == 503
-    assert "OPENAI_API_KEY" in r.json()["detail"]
+    assert "ANTHROPIC_API_KEY" in r.json()["detail"]
 
 
 def test_empty_reply_from_the_model_is_rejected(client, seller):

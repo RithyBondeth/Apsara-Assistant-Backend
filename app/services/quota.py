@@ -2,7 +2,7 @@
 
 Inbound volume stopped being ours to control the moment webhooks landed: a busy
 page, or someone deliberately messaging a bot in a loop, turns straight into
-OpenAI spend. This is the ceiling on that.
+Claude API spend. This is the ceiling on that.
 """
 
 import logging

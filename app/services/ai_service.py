@@ -6,7 +6,8 @@ from decimal import Decimal
 from functools import lru_cache
 from uuid import UUID
 
-from openai import OpenAI, OpenAIError
+import anthropic
+from anthropic import Anthropic, transform_schema
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.core.config import settings
@@ -19,7 +20,7 @@ from app.services.payment_qrs import default_payment_qr_url
 
 logger = logging.getLogger(__name__)
 
-# Messages of history sent to OpenAI. Bounded so a long-running conversation
+# Messages of history sent to the model. Bounded so a long-running conversation
 # does not grow the prompt without limit, but wide enough that follow-ups which
 # lean on earlier turns ("how much for two?") still resolve.
 HISTORY_LIMIT = 20
@@ -52,6 +53,21 @@ PHOTO_MARKER = re.compile(r"\[SEND_PHOTO:([0-9a-fA-F-]{36})\]")
 MAX_PHOTOS_PER_REPLY = 3
 
 
+# Room for the model's thinking as well as its answer: the prompt, not this
+# cap, is what keeps a reply to a few sentences. A cap tight enough to shape
+# the answer would cut it off mid-thought instead.
+MAX_TOKENS = 16000
+
+# Claude's safety classifiers can decline a request; with this the API re-runs
+# a declined one on the model Anthropic recommends for that kind of decline,
+# inside the same call, rather than leaving a customer unanswered.
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+
+# The customer turn put in front of a history that opens on the shop's.
+SHOP_SPOKE_FIRST = "(Earlier in this chat, the shop wrote:)"
+
+
 class AIError(RuntimeError):
     """Raised when a reply could not be generated."""
 
@@ -74,15 +90,23 @@ class ExtractedOrderDraft(BaseModel):
     notes: str | None = Field(max_length=2000)
 
 
+def configured() -> bool:
+    """Whether model calls can be made: a key, or the local demo stand-in."""
+    return bool(settings.ANTHROPIC_API_KEY) or settings.AI_FAKE
+
+
 @lru_cache(maxsize=1)
-def _client() -> OpenAI:
-    """The shared OpenAI client.
+def _client() -> Anthropic:
+    """The shared Anthropic client, or the demo stand-in under AI_FAKE.
 
     Built once and reused so replies do not pay for a fresh connection pool on
     every message. Constructed lazily rather than at import so the app still
     starts without a key configured.
     """
-    return OpenAI(api_key=settings.OPENAI_API_KEY)
+    if settings.AI_FAKE:
+        from app.services.fake_ai import FakeClient
+        return FakeClient()
+    return Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
 
 # ── System prompt builder ─────────────────────────────────────────────────────
@@ -377,8 +401,8 @@ def payment_qr_message(conversation_id, image_url: str) -> Message:
 
 # ── Conversation history builder ──────────────────────────────────────────────
 
-def build_openai_messages(system_prompt: str, history: list[Message]) -> list[dict]:
-    """Assemble the request payload.
+def build_messages(system_prompt: str, history: list[Message]) -> dict:
+    """Assemble the request payload: the system prompt and the turns.
 
     `history` is in chronological order and already ends with the customer
     message being answered.
@@ -388,10 +412,16 @@ def build_openai_messages(system_prompt: str, history: list[Message]) -> list[di
         for m in history
         if m.content and m.sender_type in ROLE_BY_SENDER
     ]
-    return [{"role": "system", "content": system_prompt}, *turns]
+    # The API wants the customer to speak first. A thread the shop opened —
+    # an order update, a message typed from the inbox — or a history window
+    # that happens to open on the shop's turn would otherwise be refused
+    # outright, so the shop's words are introduced rather than cut.
+    if turns and turns[0]["role"] == "assistant":
+        turns.insert(0, {"role": "user", "content": SHOP_SPOKE_FIRST})
+    return {"system": system_prompt, "messages": turns}
 
 
-def build_order_draft_messages(products: list[Product], history: list[Message]) -> list[dict]:
+def build_order_draft_messages(products: list[Product], history: list[Message]) -> dict:
     """Build a narrow extraction prompt from catalogue ids and chat history."""
     rows: list[str] = []
     for product in products[:CATALOGUE_LIMIT]:
@@ -428,66 +458,85 @@ This is a draft for a seller to review and is never an order confirmation.
 
 CATALOGUE
 {catalogue}"""
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": transcript or "No conversation messages."},
-    ]
+    return {
+        "system": system,
+        "messages": [{"role": "user", "content": transcript or "No conversation messages."}],
+    }
 
 
-# ── OpenAI call ───────────────────────────────────────────────────────────────
+# ── Model call ────────────────────────────────────────────────────────────────
 
-def generate_ai_reply(openai_messages: list[dict]) -> str:
+def create(request: dict, **kwargs):
+    """Send one request with the settings every caller shares. Raises
+    `anthropic.APIError` on transport and API failures, and `AIError` when the
+    model declined it."""
+    output_config = {"effort": settings.ANTHROPIC_EFFORT, **kwargs.pop("output_config", {})}
+    response = _client().beta.messages.create(
+        model=settings.ANTHROPIC_MODEL,
+        max_tokens=MAX_TOKENS,
+        betas=[FALLBACK_BETA],
+        fallbacks="default",
+        output_config=output_config,
+        **request,
+        **kwargs,
+    )
+    if response.stop_reason == "refusal":
+        # Only when the fallback model declined too. Logged for operators;
+        # the caller's generic message is what reaches anyone else.
+        logger.warning("The model declined a request: %s", response.stop_details)
+        raise AIError("The AI assistant could not answer this one. Please try again.")
+    return response
+
+
+def response_text(response) -> str:
+    """The answer, without the thinking and fallback blocks around it."""
+    return "".join(block.text for block in response.content if block.type == "text").strip()
+
+
+def json_output(model: type[BaseModel]) -> dict:
+    """`output_config` constraining the answer to `model`'s schema. Limits the
+    API cannot enforce — lengths, ranges — move into the descriptions, and
+    `model_validate_json` still checks them on the way back."""
+    return {"format": {"type": "json_schema", "schema": transform_schema(model)}}
+
+
+def generate_ai_reply(request: dict) -> str:
     """Call the model and return its reply. Raises `AIError` on any failure.
 
     Synchronous on purpose: the rest of the app uses a sync SQLAlchemy session,
     so the endpoint is a `def` that FastAPI runs in its threadpool. Awaiting
     here inside an `async def` would put blocking DB calls on the event loop.
     """
-    if not settings.OPENAI_API_KEY:
-        raise AIError("AI replies are not configured. Set OPENAI_API_KEY on the server.")
+    if not configured():
+        raise AIError("AI replies are not configured. Set ANTHROPIC_API_KEY on the server.")
 
     try:
-        response = _client().chat.completions.create(
-            model=settings.OPENAI_MODEL,
-            messages=openai_messages,
-            temperature=0.65,
-            max_tokens=400,
-        )
-    except OpenAIError as exc:
+        response = create(request)
+    except anthropic.APIError as exc:
         # Logged in full for operators; the caller gets a generic message so
         # upstream error text never reaches an API client.
-        logger.exception("OpenAI request failed")
+        logger.exception("Claude request failed")
         raise AIError("The AI assistant is unavailable right now. Please try again.") from exc
 
-    reply = (response.choices[0].message.content or "").strip()
+    reply = response_text(response)
     if not reply:
         raise AIError("The AI assistant returned an empty reply. Please try again.")
     return reply
 
 
-def generate_order_draft(openai_messages: list[dict]) -> ExtractedOrderDraft:
+def generate_order_draft(request: dict) -> ExtractedOrderDraft:
     """Generate a strict, schema-bound order proposal from a conversation."""
-    if not settings.OPENAI_API_KEY:
-        raise AIError("AI drafts are not configured. Set OPENAI_API_KEY on the server.")
+    if not configured():
+        raise AIError("AI drafts are not configured. Set ANTHROPIC_API_KEY on the server.")
 
-    schema = ExtractedOrderDraft.model_json_schema()
     try:
-        response = _client().chat.completions.create(
-            model=settings.OPENAI_MODEL,
-            messages=openai_messages,
-            temperature=0,
-            max_tokens=600,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": "order_draft", "strict": True, "schema": schema},
-            },
-        )
-        content = response.choices[0].message.content
+        response = create(request, output_config=json_output(ExtractedOrderDraft))
+        content = response_text(response)
         if not content:
             raise AIError("The AI assistant could not produce an order draft.")
         return ExtractedOrderDraft.model_validate_json(content)
     except AIError:
         raise
-    except (OpenAIError, ValidationError, AttributeError, IndexError, TypeError) as exc:
-        logger.exception("OpenAI order draft request failed")
+    except (anthropic.APIError, ValidationError, AttributeError, IndexError, TypeError) as exc:
+        logger.exception("Claude order draft request failed")
         raise AIError("The AI order draft is unavailable right now. Please try again.") from exc

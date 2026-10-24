@@ -81,7 +81,8 @@ def test_a_customer_receipt_is_kept_in_the_bucket_and_still_read(client, seller,
     assert row.blob is None
     assert objects(bucket)[row.storage_key] == b"receipt-bytes"
     # The vision model was handed the bytes from the bucket.
-    assert captured["messages"][1]["content"][1]["image_url"]["url"].startswith("data:image/jpeg")
+    image = captured["messages"][0]["content"][0]["source"]
+    assert (image["type"], image["media_type"]) == ("base64", "image/jpeg")
     [listed] = receipts_of(client, seller, order)
     assert listed["ocr_status"] == "read"
 

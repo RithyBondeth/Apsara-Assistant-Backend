@@ -38,7 +38,7 @@ URLs shown in the app are built from it.
 5. Message your bot from your own Telegram account.
 
 **Expected:** the conversation appears under Chat within a second or two, named
-from your Telegram profile, and — if `OPENAI_API_KEY` is set and the connection
+from your Telegram profile, and — if `ANTHROPIC_API_KEY` is set and the connection
 has auto-reply on — the assistant answers in the same language you wrote in.
 
 6. Back in the app, **Settings → Telegram alerts → Link Telegram**, and open
