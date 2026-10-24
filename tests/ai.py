@@ -1,4 +1,4 @@
-"""Helpers for driving the assistant without reaching OpenAI."""
+"""Helpers for driving the assistant without reaching the Claude API."""
 
 import types
 from contextlib import contextmanager
@@ -8,15 +8,23 @@ from app.services import ai_service
 
 
 class Captured(dict):
-    """The keyword arguments of the most recent completions call."""
+    """The keyword arguments of the most recent messages call."""
 
     @property
     def system_prompt(self) -> str:
-        return self["messages"][0]["content"]
+        return self["system"]
 
     @property
     def turns(self) -> list[dict]:
-        return self["messages"][1:]
+        return self["messages"]
+
+
+def response(text):
+    """A Messages API response carrying `text` — or no text at all for None."""
+    content = [types.SimpleNamespace(type="thinking", thinking="")]
+    if text is not None:
+        content.append(types.SimpleNamespace(type="text", text=text))
+    return types.SimpleNamespace(content=content, stop_reason="end_turn", stop_details=None)
 
 
 @contextmanager
@@ -27,12 +35,10 @@ def replies(text="Bat, mean nov ban."):
     def create(**kwargs):
         captured.clear()
         captured.update(kwargs)
-        return types.SimpleNamespace(
-            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=text))]
-        )
+        return response(text)
 
     client = mock.MagicMock()
-    client.chat.completions.create.side_effect = create
+    client.beta.messages.create.side_effect = create
     with mock.patch.object(ai_service, "_client", return_value=client):
         yield captured
 
@@ -41,6 +47,6 @@ def replies(text="Bat, mean nov ban."):
 def fails(exc):
     """Stub the model so every call raises `exc`."""
     client = mock.MagicMock()
-    client.chat.completions.create.side_effect = exc
+    client.beta.messages.create.side_effect = exc
     with mock.patch.object(ai_service, "_client", return_value=client):
         yield

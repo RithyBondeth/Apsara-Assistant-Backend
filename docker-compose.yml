@@ -1,6 +1,6 @@
 # Runs the API, the worker and Postgres together.
 #
-# The worker is a separate process on purpose. Queued work — the OpenAI call
+# The worker is a separate process on purpose. Queued work — the Claude API call
 # behind every inbound customer message — no longer runs inside the request that
 # received it, so something has to run it. With JOB_RUNNER=inline the API runs
 # it on a thread of its own and this service can be dropped; requests are still
@@ -29,7 +29,7 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       SENTRY_DSN: ${SENTRY_DSN:-}
       META_APP_SECRET: ${META_APP_SECRET:-}
       META_VERIFY_TOKEN: ${META_VERIFY_TOKEN:-}
